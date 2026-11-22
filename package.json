@@ -1,0 +1,13 @@
+{
+  "name": "room-showdown",
+  "version": "1.0.0",
+  "description": "A fast, funny top-down pistol duel party game for 2 to 7 players in the browser (peer-to-peer, no server).",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/sim.test.mjs",
+    "start": "npx --yes serve -l 3000 .",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "license": "MIT"
+}

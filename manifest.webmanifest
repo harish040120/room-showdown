@@ -1,0 +1,16 @@
+{
+  "name": "Room Showdown",
+  "short_name": "Showdown",
+  "description": "A fast, funny top-down pistol duel for 2 to 7 friends. Five lives each, last one standing wins.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0a0d18",
+  "theme_color": "#0d1020",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
