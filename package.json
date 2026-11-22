@@ -1,6 +1,6 @@
 {
   "name": "room-showdown",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "A fast, funny pistol party game (you are a gun, recoil is your only way to move) for 2 to 7 players in the browser (peer-to-peer, no server).",
   "private": true,
   "type": "module",

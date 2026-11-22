@@ -5,8 +5,7 @@ import { CONFIG } from './config.js';
 
 const C = CONFIG;
 const R = C.PLAYER_RADIUS;
-const GUN_SCALE = 0.8; // the pistol art is drawn at this scale around its center
-const MIN_FOLLOW_SCALE = 0.62; // closest zoom-out while the camera follows you
+const GUN_SCALE = R / 20 * 0.8; // the pistol art (made for a radius of 20) scaled to the hit circle
 const TAU = Math.PI * 2;
 const INK = '#0b0d16';
 
@@ -64,8 +63,6 @@ export function heartPath(g, x, y, s) {
 export function createRenderer(canvas) {
   const ctx = canvas.getContext('2d', { alpha: false });
   let W = 1, H = 1, dpr = 1, scale = 1, ox = 0, oy = 0, topInset = 0;
-  // Camera: world point at the center of the play area, smoothed between frames.
-  const cam = { x: 0, y: 0, s: 1, arena: null, focus: false };
   let time = 0;
   let shake = 0;
   let calm = false; // no screen shake (menu background demo)
@@ -83,49 +80,23 @@ export function createRenderer(canvas) {
     canvas.height = Math.round(H * dpr);
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
-    cam.arena = null; // re-center instantly
   }
 
   function setTopInset(px) {
     topInset = Math.round(px);
   }
 
-  /**
-   * Follow `focus` (the local player) with the camera, or show the whole arena when
-   * there is no focus (spectating, menu demo). Never shows outside the arena when the
-   * arena is bigger than the screen.
-   */
-  function updateCamera(arena, focus, dt) {
-    const availH = Math.max(1, H - topInset);
-    // Following: show at most VIEW_W x VIEW_H, but zoom in on small screens so the guns stay
-    // big enough to read on a phone. Overview: the whole arena.
-    const s = focus
-      ? Math.max(MIN_FOLLOW_SCALE, Math.min(W / Math.min(arena.w, C.VIEW_W), availH / Math.min(arena.h, C.VIEW_H)))
-      : Math.min(W / arena.w, availH / arena.h);
-    const visW = W / s, visH = availH / s;
-    // While following, the camera may look a little past the walls, and further below the
-    // floor: a gun resting on the floor then has room under it to aim down (= jump) with a mouse.
-    const padX = focus ? 60 : 0, padTop = focus ? 60 : 0, padBottom = focus ? Math.min(240, visH * 0.3) : 0;
-    const fitX = (v, vis) => (vis >= arena.w + 2 * padX ? arena.w / 2 : Math.max(vis / 2 - padX, Math.min(arena.w + padX - vis / 2, v)));
-    const fitY = (v, vis) => (vis >= arena.h + padTop + padBottom ? (arena.h + padBottom - padTop) / 2 : Math.max(vis / 2 - padTop, Math.min(arena.h + padBottom - vis / 2, v)));
-    const tx = fitX(focus ? focus.x : arena.w / 2, visW);
-    const ty = fitY(focus ? focus.y : arena.h / 2, visH);
-    if (cam.arena !== arena || cam.focus !== !!focus) {
-      // New arena or switching between follow and overview: glide the zoom, jump otherwise.
-      if (cam.arena !== arena) { cam.x = tx; cam.y = ty; cam.s = s; }
-      cam.arena = arena;
-      cam.focus = !!focus;
-    }
-    const k = 1 - Math.exp(-dt * 9);
-    cam.x += (tx - cam.x) * k;
-    cam.y += (ty - cam.y) * k;
-    cam.s += (s - cam.s) * (1 - Math.exp(-dt * 5));
-    // Re-clamp with the smoothed zoom so the edges never show the void.
-    cam.x = fitX(cam.x, W / cam.s);
-    cam.y = fitY(cam.y, availH / cam.s);
-    scale = cam.s;
-    ox = W / 2 - cam.x * scale;
-    oy = topInset + availH / 2 - cam.y * scale;
+  // The whole arena is always on screen, as big as the screen allows (below the HUD).
+  // In a match a strip under the floor stays free: a gun resting on the floor needs room
+  // below it to tap (= shoot down = jump).
+  let bottomPad = 0;
+  function updateCamera(arena, inMatch) {
+    bottomPad = inMatch ? Math.round(Math.max(34, Math.min(110, H * 0.13))) : 0;
+    const availH = Math.max(1, H - topInset - bottomPad);
+    scale = Math.min(W / arena.w, availH / arena.h);
+    ox = (W - arena.w * scale) / 2;
+    oy = topInset + (availH - arena.h * scale);
+    // Arena sits right above the free strip; any spare height goes above it.
   }
 
   // Side-view room: back wall with a faint grid, solid border, floating platforms and crates.
@@ -177,12 +148,9 @@ export function createRenderer(canvas) {
         ctx.moveTo(o.x + o.w - 10, o.y + 10); ctx.lineTo(o.x + 10, o.y + o.h - 10); ctx.stroke();
       }
     }
-    // ground below the floor (visible when the camera looks under it)
-    ctx.fillStyle = '#121729';
-    ctx.fillRect(-400, AH, AW + 800, 600);
-    ctx.fillRect(-400, -600, AW + 800, 600);
-    ctx.fillRect(-400, 0, 400, AH);
-    ctx.fillRect(AW, 0, 400, AH);
+    // the ground under the floor (the free tap strip in a match)
+    ctx.fillStyle = '#141a2c';
+    ctx.fillRect(-AW, AH, AW * 3, AH);
     // border walls
     ctx.fillStyle = '#2a3150';
     ctx.fillRect(0, 0, AW, t); ctx.fillRect(0, AH - t, AW, t); ctx.fillRect(0, 0, t, AH); ctx.fillRect(AW - t, 0, t, AH);
@@ -311,7 +279,7 @@ export function createRenderer(canvas) {
       ctx.lineWidth = 3;
       ctx.setLineDash([7, 6]);
       ctx.lineDashOffset = -time * 24;
-      ctx.beginPath(); ctx.arc(0, 0, R + 14, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, R + 12, 0, TAU); ctx.stroke();
       ctx.setLineDash([]);
     }
     const invuln = p.invuln > 0;
@@ -371,39 +339,12 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  // Arrows at the screen edge pointing to players the camera cannot see.
-  function drawOffscreen(players, myId) {
-    const pad = 22, top = topInset + pad;
-    for (const p of players) {
-      if (p.id === myId) continue;
-      const sx = ox + p.x * scale, sy = oy + p.y * scale;
-      if (sx >= 0 && sx <= W && sy >= topInset && sy <= H) continue;
-      const cx = Math.max(pad, Math.min(W - pad, sx));
-      const cy = Math.max(top, Math.min(H - pad, sy));
-      const a = Math.atan2(sy - cy, sx - cx);
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(a);
-      ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-6, -10); ctx.lineTo(-6, 10); ctx.closePath();
-      ctx.fillStyle = p.color; ctx.fill();
-      ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.stroke();
-      ctx.restore();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '800 11px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const lx = cx - Math.cos(a) * 16, ly = cy - Math.sin(a) * 16;
-      ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.strokeText(String(p.slot + 1), lx, ly);
-      ctx.fillText(String(p.slot + 1), lx, ly);
-    }
-  }
-
   function drawLabel(p, isMe) {
     const small = scale < 0.62;
     const fontPx = small ? 11 : 13;
     const heartPx = small ? 7 : 9;
     const f = fontPx / scale, hs = heartPx / scale;
-    const baseY = p.y - R - 12 - 7 / scale;
+    const baseY = p.y - R - 10 - 7 / scale;
     // hearts
     const gap = hs * 1.2;
     const startX = p.x - (gap * (C.LIVES - 1)) / 2;
@@ -438,27 +379,6 @@ export function createRenderer(canvas) {
     ctx.textAlign = 'left';
     ctx.fillStyle = '#ffffff';
     ctx.fillText(name, lx + bw + pad, y + f * 0.04);
-  }
-
-  function drawAimLine(p) {
-    const col = colorInfo(p.color);
-    const ca = Math.cos(p.aim), sa = Math.sin(p.aim);
-    ctx.save();
-    ctx.strokeStyle = col.rgba(0.35);
-    ctx.lineWidth = 2.5;
-    ctx.setLineDash([10, 10]);
-    ctx.beginPath();
-    ctx.moveTo(p.x + ca * (C.MUZZLE_OFFSET + 14), p.y + sa * (C.MUZZLE_OFFSET + 14));
-    ctx.lineTo(p.x + ca * 170, p.y + sa * 170);
-    // recoil hint: a short arrow the other way shows where the shot will push you
-    ctx.setLineDash([]);
-    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
-    ctx.beginPath();
-    ctx.moveTo(p.x - ca * (R + 10), p.y - sa * (R + 10));
-    ctx.lineTo(p.x - ca * (R + 34), p.y - sa * (R + 34));
-    ctx.stroke();
-    ctx.stroke();
-    ctx.restore();
   }
 
   function drawParticles() {
@@ -515,46 +435,22 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  function drawStick(s, hintX, hintY, radius, kind, fireZone) {
+  // A ring where the screen was tapped, so you see where your shot went.
+  function drawTapMarker(tap) {
+    const age = (performance.now() - tap.t) / 1000;
+    if (age > 0.35) return;
+    const k = age / 0.35;
     ctx.save();
-    if (s.id === null) {
-      // resting hint so players know where to put their thumbs
-      ctx.globalAlpha = 0.16;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(hintX, hintY, radius, 0, TAU); ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `700 ${Math.round(radius * 0.32)}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(kind === 'move' ? 'AIM' : 'AIM + FIRE', hintX, hintY);
-      ctx.restore();
-      return;
-    }
-    const m = Math.hypot(s.vx, s.vy);
-    const firing = kind === 'aim' && m > fireZone;
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = 'rgba(255,255,255,0.07)';
-    ctx.strokeStyle = 'rgba(255,255,255,0.32)';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(s.ox, s.oy, radius, 0, TAU); ctx.fill(); ctx.stroke();
-    if (kind === 'aim') {
-      ctx.setLineDash([5, 6]);
-      ctx.strokeStyle = 'rgba(255,120,120,0.45)';
-      ctx.beginPath(); ctx.arc(s.ox, s.oy, radius * fireZone, 0, TAU); ctx.stroke();
-      ctx.setLineDash([]);
-    }
-    const kx = s.ox + Math.max(-1, Math.min(1, s.vx)) * radius;
-    const ky = s.oy + Math.max(-1, Math.min(1, s.vy)) * radius;
-    ctx.fillStyle = firing ? 'rgba(255,90,110,0.65)' : 'rgba(255,255,255,0.4)';
-    ctx.beginPath(); ctx.arc(kx, ky, radius * 0.42, 0, TAU); ctx.fill();
+    ctx.globalAlpha = 1 - k;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(tap.x, tap.y, 10 + k * 26, 0, TAU); ctx.stroke();
     ctx.restore();
   }
 
   /**
    * Draw one frame.
-   * view = { arena, focus:{x,y}|null, players, bullets, myId, crosshair:{x,y}|null,
-   *          sticks|null, stickRadius, fireZone, labels }
+   * view = { arena, players, bullets, myId, crosshair:{x,y}|null, tap:{x,y,t}|null, labels }
    */
   function draw(view, dt) {
     time += dt;
@@ -563,7 +459,7 @@ export function createRenderer(canvas) {
     ctx.fillStyle = '#0a0d18';
     ctx.fillRect(0, 0, W, H);
     if (!view.arena) return;
-    updateCamera(view.arena, view.focus || null, dt);
+    updateCamera(view.arena, view.myId !== null && view.myId !== undefined);
 
     const sx = shake ? (Math.random() * 2 - 1) * shake : 0;
     const sy = shake ? (Math.random() * 2 - 1) * shake : 0;
@@ -580,19 +476,13 @@ export function createRenderer(canvas) {
 
     const alive = view.players.filter((p) => p.alive);
     const me = alive.find((p) => p.id === view.myId);
-    if (me && view.aimLine) drawAimLine(me);
     for (const p of alive) drawPlayer(p, p.id === view.myId);
     drawParticles();
     if (view.labels !== false) for (const p of alive) drawLabel(p, p.id === view.myId);
 
     // screen-space overlays
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (view.focus) drawOffscreen(alive, view.myId);
-    if (view.sticks) {
-      const r = view.stickRadius;
-      drawStick(view.sticks.left, r + 24, H - r - 24, r, 'move', view.fireZone);
-      drawStick(view.sticks.right, W - r - 24, H - r - 24, r, 'aim', view.fireZone);
-    }
+    if (view.tap) drawTapMarker(view.tap);
     if (view.crosshair) drawCrosshair(view.crosshair.x, view.crosshair.y, me ? me.color : null);
   }
 
@@ -617,8 +507,6 @@ export function createHud() {
   const $ = (id) => document.getElementById(id);
   const root = $('hud');
   const heartsEl = $('hud-hearts');
-  const pipsEl = $('hud-pips');
-  const ringEl = $('hud-reload');
   const timerEl = $('hud-timer');
   const boardEl = $('hud-board');
   const pingEl = $('hud-ping');
@@ -628,9 +516,7 @@ export function createHud() {
   const specEl = $('spectate');
 
   heartsEl.innerHTML = Array.from({ length: C.LIVES }, () => `<span class="heart">${HEART_SVG}</span>`).join('');
-  pipsEl.innerHTML = Array.from({ length: C.MAG_SIZE }, () => '<span class="pip"></span>').join('');
   const hearts = [...heartsEl.children];
-  const pips = [...pipsEl.children];
   let last = {};
   let boardKey = '';
   let boardRows = new Map();
@@ -669,7 +555,7 @@ export function createHud() {
   }
 
   /**
-   * m = { me:{lives, ammo, reloadFrac, alive}|null, timeLeft, players:[...], ping:{text, level},
+   * m = { me:{lives, alive}|null, timeLeft, players:[...], ping:{text, level},
    *       spectating: string|null, myId }
    */
   function update(m) {
@@ -680,17 +566,6 @@ export function createHud() {
       heartsEl.classList.toggle('hidden', lives < 0);
       last.lives = lives;
     }
-    const ammo = m.me ? m.me.ammo : -1;
-    if (ammo !== last.ammo) {
-      pips.forEach((p, i) => p.classList.toggle('empty', i >= ammo));
-      last.ammo = ammo;
-    }
-    const reloading = !!(m.me && m.me.reloadFrac !== null && m.me.reloadFrac !== undefined);
-    if (reloading !== last.reloading) { ringEl.classList.toggle('active', reloading); last.reloading = reloading; }
-    if (reloading) ringEl.style.setProperty('--p', String(Math.max(0, Math.min(1, m.me.reloadFrac))));
-    const ammoVisible = !!m.me && m.me.alive;
-    if (ammoVisible !== last.ammoVisible) { pipsEl.parentElement.classList.toggle('hidden', !ammoVisible); last.ammoVisible = ammoVisible; }
-
     const tt = fmtTime(m.timeLeft);
     if (tt !== last.time) { timerEl.textContent = tt; last.time = tt; }
     const low = m.timeLeft <= 10.5 && m.timeLeft > 0;

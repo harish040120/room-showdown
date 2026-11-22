@@ -63,14 +63,14 @@ export function buildArena(n) {
     { x: W - T, y: 0, w: T, h: H, wall: true },
   ];
   const S = C.PLATFORM_SPACING, PW = C.PLATFORM_W, PH = C.PLATFORM_H;
-  const minX = T + 70, maxX = W - T - 70;
+  const minX = T + 60, maxX = W - T - 60;
   const add = (x, y, w, h, kind) => {
     if (x < minX || x + w > maxX) return;
     solids.push({ x: r1(x), y: r1(y), w, h, wall: false, kind });
   };
   // Platform rows from the floor upwards. Odd rows are shifted by half a spacing.
   let row = 0;
-  for (let y = H - T - C.PLATFORM_ROW_GAP; y > T + 190; y -= C.PLATFORM_ROW_GAP, row++) {
+  for (let y = H - T - C.PLATFORM_ROW_GAP; y > T + 170; y -= C.PLATFORM_ROW_GAP, row++) {
     const centers = [];
     if (row % 2 === 0) {
       centers.push(cx);
@@ -88,7 +88,7 @@ export function buildArena(n) {
 
   function buildSpawns(w, h, count, sol) {
     const c = clamp(count, 1, C.MAX_PLAYERS);
-    const margin = T + 220;
+    const margin = T + 140;
     const xs = [];
     for (let i = 0; i < c; i++) xs.push(c === 1 ? w / 2 : margin + ((w - 2 * margin) * i) / (c - 1));
     // Join order alternates between the ends so early joiners are far apart: 0, last, 1, last-1 ...
@@ -289,9 +289,7 @@ function makePlayer(r, spawn) {
     vx: 0, vy: 0, grounded: false,
     aim: spawn.aim,
     lives: C.LIVES,
-    ammo: C.MAG_SIZE,
-    reload: 0,   // seconds of reload remaining (0 = not reloading)
-    cooldown: 0, // seconds until the pistol can fire again
+    cooldown: 0, // seconds until the pistol can fire again (bullets are unlimited)
     invuln: 0,   // seconds of invulnerability remaining
     alive: true,
     left: false, // disconnected
@@ -299,9 +297,8 @@ function makePlayer(r, spawn) {
     shots: 0,
     elimTick: -1,
     killedBy: null,
-    input: { mx: 0, my: 0, aim: spawn.aim, fire: false, reload: false },
+    input: { aim: spawn.aim, fire: false },
     fireLatch: false,   // a short tap between two ticks still fires
-    reloadLatch: false,
   };
 }
 
@@ -345,12 +342,11 @@ function emit(state, ev) {
 /** Validate and clamp an untrusted input object. Never trust what a client sends. */
 export function sanitizeInput(inp, prev) {
   // There is no movement input: players only move through recoil, which the host computes.
-  const out = { aim: prev && Number.isFinite(prev.aim) ? prev.aim : 0, fire: false, reload: false };
+  const out = { aim: prev && Number.isFinite(prev.aim) ? prev.aim : 0, fire: false };
   if (!inp || typeof inp !== 'object') return out;
   const aim = Number(inp.aim);
   if (Number.isFinite(aim) && Math.abs(aim) < 1e6) out.aim = wrapAngle(aim);
   out.fire = inp.fire === true || inp.fire === 1;
-  out.reload = inp.reload === true || inp.reload === 1;
   return out;
 }
 
@@ -360,7 +356,6 @@ export function setInput(state, id, input) {
   const inp = sanitizeInput(input, p.input);
   p.input = inp;
   if (inp.fire) p.fireLatch = true;
-  if (inp.reload) p.reloadLatch = true;
 }
 
 /** A player disconnected: their character is eliminated. */
@@ -368,8 +363,8 @@ export function removePlayer(state, id) {
   const p = getPlayer(state, id);
   if (!p || p.left) return;
   p.left = true;
-  p.input = { aim: p.aim, fire: false, reload: false };
-  p.fireLatch = p.reloadLatch = false;
+  p.input = { aim: p.aim, fire: false };
+  p.fireLatch = false;
   if (p.alive && state.phase !== 'ended') eliminate(state, p, null, 'left');
 }
 
@@ -387,7 +382,7 @@ export function step(state, dt = DT) {
     state.countdown = Math.max(0, state.countdown - dt);
     for (const p of P) {
       if (p.alive) p.aim = p.input.aim; // aiming is allowed, moving and shooting are not
-      p.fireLatch = p.reloadLatch = false;
+      p.fireLatch = false;
     }
     const n = Math.ceil(state.countdown - 1e-9);
     if (n >= 1 && n < state.lastCount) {
@@ -415,41 +410,17 @@ function updatePlayer(state, p, dt) {
   if (p.invuln > 0) { p.invuln -= dt; if (p.invuln < EPS) p.invuln = 0; }
   if (p.cooldown > 0) { p.cooldown -= dt; if (p.cooldown < EPS) p.cooldown = 0; }
 
-  // Reload
-  if (p.reload > 0) {
-    p.reload -= dt;
-    if (p.reload <= EPS) {
-      p.reload = 0;
-      p.ammo = C.MAG_SIZE;
-      emit(state, { type: 'reloaded', id: p.id });
-    }
-  } else if ((inp.reload || p.reloadLatch) && p.ammo < C.MAG_SIZE) {
-    startReload(state, p);
-  }
-
-  // Fire (hold to keep firing at the cooldown rate)
-  if ((inp.fire || p.fireLatch) && p.reload === 0 && p.cooldown <= EPS && p.ammo > 0) {
-    fireBullet(state, p);
-  }
-  if (p.ammo === 0 && p.reload === 0) startReload(state, p); // automatic reload when empty
-
+  // Fire (unlimited bullets; a tap between two ticks still fires, holding keeps firing)
+  if ((inp.fire || p.fireLatch) && p.cooldown <= EPS) fireBullet(state, p);
   p.fireLatch = false;
-  p.reloadLatch = false;
 
   // Gravity + movement (the shot above may just have kicked us)
   stepBody(p, dt, state.arena);
 }
 
-function startReload(state, p) {
-  if (p.reload > 0 || p.ammo >= C.MAG_SIZE) return;
-  p.reload = C.RELOAD_TIME;
-  emit(state, { type: 'reload', id: p.id });
-}
-
 function fireBullet(state, p) {
   const cos = Math.cos(p.aim), sin = Math.sin(p.aim);
   const mx = p.x + cos * C.MUZZLE_OFFSET, my = p.y + sin * C.MUZZLE_OFFSET;
-  p.ammo--;
   p.cooldown = C.FIRE_COOLDOWN;
   p.shots++;
   applyRecoil(p, p.aim);
@@ -525,7 +496,6 @@ function eliminate(state, p, by, reason) {
   p.killedBy = by;
   p.invuln = 0;
   p.vx = p.vy = 0;
-  p.reload = 0;
   emit(state, { type: 'elim', id: p.id, by, x: r1(p.x), y: r1(p.y), reason });
 }
 
@@ -589,20 +559,19 @@ export function cleanName(raw) {
 // ---------------------------------------------------------------------------
 // Compact network encoding (pure, so it is unit tested too)
 // ---------------------------------------------------------------------------
-// Player: [id, x, y, aim, lives, ammo, reloadLeft, invuln, flags, hits, vx, vy, cooldown]
+// Player: [id, x, y, aim, lives, invuln, flags, hits, vx, vy, cooldown]
 //   flags bit0 = alive, bit1 = left the room
 export function packPlayer(p) {
   return [
-    p.id, r1(p.x), r1(p.y), r2(p.aim), p.lives, p.ammo,
-    r2(p.reload), r1(p.invuln), (p.alive ? 1 : 0) | (p.left ? 2 : 0), p.hits,
-    r1(p.vx), r1(p.vy), r2(p.cooldown),
+    p.id, r1(p.x), r1(p.y), r2(p.aim), p.lives, r1(p.invuln),
+    (p.alive ? 1 : 0) | (p.left ? 2 : 0), p.hits, r1(p.vx), r1(p.vy), r3(p.cooldown),
   ];
 }
 export function unpackPlayer(a) {
   return {
-    id: a[0], x: a[1], y: a[2], aim: a[3], lives: a[4], ammo: a[5],
-    reload: a[6], invuln: a[7], alive: (a[8] & 1) === 1, left: (a[8] & 2) === 2, hits: a[9],
-    vx: a[10] || 0, vy: a[11] || 0, cooldown: a[12] || 0,
+    id: a[0], x: a[1], y: a[2], aim: a[3], lives: a[4], invuln: a[5],
+    alive: (a[6] & 1) === 1, left: (a[6] & 2) === 2, hits: a[7],
+    vx: a[8] || 0, vy: a[9] || 0, cooldown: a[10] || 0,
   };
 }
 // Bullet: [id, x, y, vx, vy, owner]

@@ -1,5 +1,5 @@
 // Room Showdown: bot AI for Practice mode (and the menu's background demo).
-// Bots only produce inputs ({aim, fire, reload}) and feed them into the very same
+// Bots only produce inputs ({aim, fire}) and feed them into the very same
 // simulation that multiplayer uses. Like everyone else they can only move with recoil:
 // every shot is either an attack (aimed at a target) or a jump (aimed at the floor).
 // Pure logic: no DOM, deterministic with a seed.
@@ -11,15 +11,15 @@ const C = CONFIG;
 
 export const BOT_LEVELS = {
   easy: {
-    aimError: 0.2, turnRate: 4, reaction: 0.6, fireGap: [0.3, 0.9], range: 700, fireTol: 3,
+    aimError: 0.2, turnRate: 4, reaction: 0.6, fireGap: [0.45, 1.1], range: 700, fireTol: 3,
     lead: 0, hover: 0.35, holdOnInvuln: false,
   },
   normal: {
-    aimError: 0.1, turnRate: 6.5, reaction: 0.35, fireGap: [0.08, 0.4], range: 900, fireTol: 1.6,
+    aimError: 0.1, turnRate: 6.5, reaction: 0.35, fireGap: [0.2, 0.55], range: 900, fireTol: 1.6,
     lead: 0.5, hover: 0.6, holdOnInvuln: true,
   },
   hard: {
-    aimError: 0.03, turnRate: 12, reaction: 0.12, fireGap: [0, 0.06], range: 1100, fireTol: 1,
+    aimError: 0.03, turnRate: 12, reaction: 0.12, fireGap: [0.08, 0.25], range: 1050, fireTol: 1,
     lead: 1, hover: 0.85, holdOnInvuln: true,
   },
 };
@@ -67,7 +67,7 @@ function jumpAim(me, towardX, arena) {
 
 function think(B, state, dt) {
   const me = getPlayer(state, B.id);
-  const input = { aim: me ? me.aim : 0, fire: false, reload: false };
+  const input = { aim: me ? me.aim : 0, fire: false };
   if (!me || !me.alive) return input;
   if (B.aim === null) B.aim = me.aim;
   const arena = state.arena;
@@ -134,14 +134,13 @@ function think(B, state, dt) {
 
   if (los) B.seenT += dt; else B.seenT = 0;
   B.fireT -= dt;
-  const ready = B.fireT <= 0 && me.reload === 0 && me.ammo > 0 && me.cooldown <= 0;
+  const ready = B.fireT <= 0 && me.cooldown <= 0;
   const aimErr = Math.abs(wrapAngle(desired - B.aim));
   if (ready) {
     if (B.mode === 'jump') {
-      // Keep one bullet for a fight unless we are about to hit the floor.
-      if (aimErr < 0.25 && (me.ammo > 1 || me.y > floorY - 60)) {
+      if (aimErr < 0.3) {
         input.fire = true;
-        B.fireT = C.FIRE_COOLDOWN + B.rng() * 0.1;
+        B.fireT = C.FIRE_COOLDOWN + 0.05 + B.rng() * 0.15;
       }
     } else if (target && los && dist < B.cfg.range && B.seenT >= B.cfg.reaction) {
       const tol = Math.atan2((C.PLAYER_RADIUS + C.BULLET_RADIUS) * B.cfg.fireTol, dist);
@@ -153,8 +152,5 @@ function think(B, state, dt) {
       }
     }
   }
-  // Reload while resting on something: when out of danger, or when down to the last bullet
-  // (a bot standing still with one bullet it refuses to use would stall the match).
-  if (me.grounded && me.reload === 0 && (me.ammo <= 1 || (!los && me.ammo <= 3))) input.reload = true;
   return input;
 }

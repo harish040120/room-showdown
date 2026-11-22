@@ -2,50 +2,46 @@
 // Pure data with no DOM access, so the simulation and tests can import it in Node too.
 
 export const CONFIG = Object.freeze({
-  VERSION: '2.0.0',
-  PROTOCOL: 2, // bump when the network message format changes
+  VERSION: '3.0.0',
+  PROTOCOL: 3, // bump when the network message format changes
 
-  // ---- Arena (side view, logical units). It grows with the number of players. ----
-  ARENA_BASE_W: 1800, // width for 2 players
-  ARENA_BASE_H: 1000,
-  ARENA_GROW_W: 320,  // extra width per extra player (7 players: 3400)
-  ARENA_GROW_H: 100,  // extra height per extra player (7 players: 1500)
-  WALL: 28,           // thickness of the floor, ceiling and side walls
+  // ---- Arena (side view, logical units). Small, growing a little with each player. ----
+  // The whole arena is always on screen.
+  ARENA_BASE_W: 1280, // width for 2 players
+  ARENA_BASE_H: 720,
+  ARENA_GROW_W: 100,  // extra width per extra player (7 players: 1780)
+  ARENA_GROW_H: 56,   // extra height per extra player (7 players: 1000)
+  WALL: 26,           // thickness of the floor, ceiling and side walls
   // Floating platforms: rows from the floor up, mirror-symmetric around the middle.
-  PLATFORM_ROW_GAP: 230,
-  PLATFORM_SPACING: 560,
-  PLATFORM_W: 230,
-  PLATFORM_H: 26,
-  // The camera never shows more than this much of the arena (smaller screens show less).
-  VIEW_W: 1500,
-  VIEW_H: 860,
+  PLATFORM_ROW_GAP: 200,
+  PLATFORM_SPACING: 430,
+  PLATFORM_W: 190,
+  PLATFORM_H: 24,
 
   // ---- Players (each player is a pistol) ----
   MAX_PLAYERS: 7,
   LIVES: 5,
-  PLAYER_RADIUS: 20, // hit and collision circle
+  PLAYER_RADIUS: 26, // hit and collision circle
 
   // ---- Physics ----
-  GRAVITY: 1700,        // px/s^2, pulls down
-  RECOIL: 570,          // px/s kick per shot, opposite to the aim
+  GRAVITY: 1500,        // px/s^2, pulls down
+  RECOIL: 360,          // px/s kick per shot, opposite to the aim (about 4 taps/s to hover)
   RECOIL_CANCEL: 0.7,   // share of the speed against the kick that a shot cancels first
-  MAX_SPEED: 1300,      // px/s
+  MAX_SPEED: 1100,      // px/s
   AIR_DRAG: 0.35,       // exponential slow-down per second in the air
   GROUND_FRICTION: 7,   // exponential slow-down per second while resting on something
   BOUNCE: 0.3,          // share of speed kept when bouncing off a surface
 
-  // ---- Pistol ----
-  MAG_SIZE: 6,
-  FIRE_COOLDOWN: 0.3,  // seconds between shots
-  RELOAD_TIME: 1.1,    // seconds
-  BULLET_SPEED: 900,   // px per second
-  BULLET_RADIUS: 4,
-  BULLET_LIFETIME: 1.3, // seconds (range about 1,170 px)
-  MUZZLE_OFFSET: 30,    // distance from the gun's center to its barrel tip
+  // ---- Pistol: unlimited bullets, no reload. Every tap fires toward the tap. ----
+  FIRE_COOLDOWN: 8 / 60, // seconds between shots (8 ticks: at most 7.5 shots per second)
+  BULLET_SPEED: 900,    // px per second
+  BULLET_RADIUS: 5,
+  BULLET_LIFETIME: 1.2, // seconds (range about 1,080 px)
+  MUZZLE_OFFSET: 40,    // distance from the gun's center to its barrel tip
 
   // ---- Getting hit ----
   INVULN_TIME: 1.5,     // seconds of invulnerability after a hit
-  KNOCKBACK_SPEED: 480, // speed a hit adds in the bullet's direction (px/s)
+  KNOCKBACK_SPEED: 420, // speed a hit adds in the bullet's direction (px/s)
 
   // ---- Match flow ----
   COUNTDOWN: 3,       // "3-2-1-DUEL!"

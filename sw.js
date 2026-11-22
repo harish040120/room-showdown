@@ -3,7 +3,7 @@
 // only same-origin GET requests are handled.
 // Bump CACHE whenever any file below changes, so players get the new version.
 
-const CACHE = 'room-showdown-v2.0.0';
+const CACHE = 'room-showdown-v3.0.0';
 const SHELL = [
   './',
   'index.html',

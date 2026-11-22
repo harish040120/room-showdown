@@ -23,10 +23,6 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2.4H3zm0 4.8h18v2.4H3zm0 4.8h18V18H3z"/></svg>
       </button>
       <div id="hud-hearts" class="hearts" aria-label="Your lives"></div>
-      <div class="ammo" aria-label="Ammo">
-        <div id="hud-pips" class="pips"></div>
-        <div id="hud-reload" class="reload-ring" title="Reloading"><span>R</span></div>
-      </div>
     </div>
     <div class="hud-group hud-center">
       <div id="hud-timer" class="timer">3:00</div>
@@ -44,9 +40,6 @@
   <div id="banner" class="banner"></div>
   <div id="spectate" class="spectate hidden"></div>
   <div id="host-notice" class="host-notice hidden">Host: keep this tab open and the screen on</div>
-  <button id="btn-reload" class="touch-btn hidden" type="button" aria-label="Reload">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.7 6.3A8 8 0 1 0 19.7 14h-2.1a6 6 0 1 1-1.4-6.2L13 11h7V4z"/></svg>
-  </button>
 
   <!-- ===== Main menu ===== -->
   <section id="screen-menu" class="screen active">
@@ -142,26 +135,22 @@
       <p>The match lasts 3 minutes. If time runs out, the player with the most lives wins (ties: most hits landed).</p>
       <div class="howto-grid">
         <div>
-          <h3>Keyboard + mouse</h3>
+          <h3>Phone (landscape)</h3>
           <ul>
-            <li>Mouse: aim (or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrow keys)</li>
-            <li>Left click or <kbd>Space</kbd>: shoot (hold to keep firing)</li>
-            <li><kbd>R</kbd>: reload (6 bullets; reloads by itself when empty)</li>
-            <li><kbd>Esc</kbd>: menu (the match keeps going!)</li>
+            <li><b>Tap anywhere</b>: your gun shoots toward the spot you tapped</li>
+            <li>Keep your finger down to keep firing, slide it to steer</li>
           </ul>
         </div>
         <div>
-          <h3>Phone (landscape)</h3>
+          <h3>Mouse + keyboard</h3>
           <ul>
-            <li>Right thumb: aim stick, push it past the dashed ring to fire</li>
-            <li>Left thumb: aim without firing</li>
-            <li>Round button: reload</li>
+            <li>The gun points at your mouse</li>
+            <li><b>Click</b> or <kbd>Space</kbd>: shoot (hold to keep firing)</li>
+            <li><kbd>Esc</kbd>: menu (the match keeps going!)</li>
           </ul>
-          <h3>Gamepad</h3>
-          <ul><li>Either stick aims, RT/RB/A shoots, X reloads</li></ul>
         </div>
       </div>
-      <p class="note">Tip: you can fly up through platforms and land on top of them. Platforms and crates stop bullets, so use them for cover. Don't empty your gun in the air: you fall while you reload!</p>
+      <p class="note">Bullets are unlimited and there's no reloading. To fly up, tap <b>below</b> your gun. To dash left, tap to its right. You can fly up through platforms and land on them. Platforms and crates stop bullets, so use them for cover.</p>
       <div class="row"><button class="btn primary" data-close type="button" data-autofocus>Got it</button></div>
     </div>
   </div>

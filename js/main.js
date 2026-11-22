@@ -164,12 +164,6 @@ function playEvents(evs, { silent = false, rosterOf = null, skipMyShot = null } 
         fx.muzzle(e.id);
         snd('shot', { pan: panOf(e.x), vol: e.id === me ? 0.9 : 0.55 });
         break;
-      case 'reload':
-        if (e.id === me) snd('reload');
-        break;
-      case 'reloaded':
-        if (e.id === me) snd('reloaded');
-        break;
       case 'wall':
         fx.spark(e.x, e.y);
         if (e.owner === me) snd('wall', { pan: panOf(e.x) });
@@ -223,7 +217,6 @@ function setScreen(name) {
   if (!inMatch) ui.closeAllModals();
   ui.showScreen(inMatch ? null : name);
   input.setEnabled(inMatch && !ui.paused);
-  document.getElementById('btn-reload').classList.toggle('hidden', !(inMatch && input.touchUI));
   document.getElementById('host-notice').classList.toggle('hidden', !(inMatch && G.mode === 'host'));
   renderer.setTopInset(inMatch ? hud.height : 0);
   keepAwake(name !== 'menu');
@@ -594,7 +587,7 @@ function newClientState() {
     predAcc: 0,
     seq: 0,
     sendAcc: 0,
-    fire: false, reload: false, aim: 0,
+    fire: false, aim: 0,
     predCd: 0,
     predShots: [],      // local times of shots shown before the host confirmed them
     stats: { n: 0, sum: 0, max: 0, snaps: 0 }, // prediction error, for debugging (window.__roomShowdown)
@@ -775,10 +768,7 @@ function clientFrame(now, dt) {
   const scr = cl.pred ? renderer.worldToScreen(cl.pred.x, cl.pred.y) : null;
   const inp = input.sample({ playerScreen: scr });
   cl.aim = inp.aim;
-  if (inRoster) {
-    cl.fire = cl.fire || inp.fire;
-    cl.reload = cl.reload || inp.reload;
-  }
+  if (inRoster) cl.fire = cl.fire || inp.fire;
 
   // Predict my own flight with the same fixed-step physics as the host. A predicted shot
   // kicks immediately and shows its flash + sound; the host's echo of it is then skipped.
@@ -790,7 +780,7 @@ function clientFrame(now, dt) {
       n++;
       cl.predCd = Math.max(0, cl.predCd - DT);
       let fired = false;
-      if (inp.fire && cl.predCd <= 1e-6 && sm.reload === 0 && sm.ammo - cl.predShots.length > 0) {
+      if (inp.fire && cl.predCd <= 1e-6) {
         fired = true;
         cl.predCd = C.FIRE_COOLDOWN;
         S.applyRecoil(cl.pred, cl.aim);
@@ -811,12 +801,11 @@ function clientFrame(now, dt) {
   if (inRoster && cl.sendAcc >= 1 / C.INPUT_RATE) {
     cl.sendAcc = 0;
     cl.seq++;
-    net.send({ t: 'in', s: cl.seq, aim: S.r3(cl.aim), fire: cl.fire, reload: cl.reload });
+    net.send({ t: 'in', s: cl.seq, aim: S.r3(cl.aim), fire: cl.fire });
     cl.pending.push({ seq: cl.seq, ticks: cl.unsent });
     if (cl.pending.length > 90) cl.pending.shift();
     cl.unsent = [];
     cl.fire = false;
-    cl.reload = false;
   }
 
   // --- render time & interpolation ---
@@ -903,8 +892,6 @@ const ui = createUI({
 });
 
 document.getElementById('hud-menu').addEventListener('click', () => ui.showPause());
-const reloadBtn = document.getElementById('btn-reload');
-reloadBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); input.pressReload(); });
 
 // Audio may only start after a user gesture.
 for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, () => audio.unlockAudio(), { passive: true });
@@ -916,11 +903,11 @@ function myHudState() {
   if (G.mode === 'client') {
     const sm = G.cl && G.cl.serverMe;
     if (!sm || !G.rosterById.has(G.myId)) return null;
-    return { lives: sm.lives, ammo: sm.ammo, alive: sm.alive, reloadFrac: sm.reload > 0 ? 1 - sm.reload / C.RELOAD_TIME : null };
+    return { lives: sm.lives, alive: sm.alive };
   }
   const p = G.sim && S.getPlayer(G.sim.state, G.myId);
   if (!p) return null;
-  return { lives: p.lives, ammo: p.ammo, alive: p.alive, reloadFrac: p.reload > 0 ? 1 - p.reload / C.RELOAD_TIME : null };
+  return { lives: p.lives, alive: p.alive };
 }
 
 function pingInfo() {
@@ -985,15 +972,10 @@ function frame(now) {
     if (inset !== lastInset) { lastInset = inset; renderer.setTopInset(inset); }
     updateHud(view);
     const meView = view.players.find((p) => p.id === G.myId && p.alive);
-    // The camera follows you while you play, and shows the whole arena when you watch.
-    view.focus = meView && G.rosterById.has(G.myId) ? { x: meView.x, y: meView.y } : null;
     const mouseAim = input.aimSource === 'mouse' && !input.touchUI;
     document.body.classList.toggle('mouse-aim', mouseAim && !ui.paused);
     view.crosshair = meView && mouseAim && input.mouse.seen && !ui.paused ? { x: input.mouse.x, y: input.mouse.y } : null;
-    view.sticks = input.touchUI && meView ? input.sticks : null;
-    view.stickRadius = input.stickRadius();
-    view.fireZone = input.fireZone;
-    view.aimLine = !!meView && input.aimSource !== 'mouse';
+    view.tap = meView && input.aimSource === 'touch' ? input.lastTap : null;
   } else if (lastInset !== 0) {
     lastInset = 0;
     renderer.setTopInset(0);

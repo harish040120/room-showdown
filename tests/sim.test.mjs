@@ -63,12 +63,12 @@ const UP = -Math.PI / 2, DOWN = Math.PI / 2;
 // ---- tests -------------------------------------------------------------------
 section('Setup and arena');
 
-test('every player starts with exactly 5 lives, a full magazine and alive', () => {
+test('every player starts with exactly 5 lives and alive (bullets are unlimited)', () => {
   const st = S.createMatch(roster(7));
   assert.equal(st.players.length, 7);
   for (const p of st.players) {
     assert.equal(p.lives, 5);
-    assert.equal(p.ammo, 6);
+    assert.equal('ammo' in p, false);
     assert.equal(p.alive, true);
     assert.equal(p.hits, 0);
   }
@@ -88,8 +88,9 @@ test('the arena grows with the number of players', () => {
     if (prev) assert.ok(a.w > prev.w && a.h > prev.h, `arena for ${n} should be bigger`);
     prev = a;
   }
-  assert.deepEqual([S.buildArena(2).w, S.buildArena(2).h], [1800, 1000]);
-  assert.deepEqual([S.buildArena(7).w, S.buildArena(7).h], [3400, 1500]);
+  assert.deepEqual([S.buildArena(2).w, S.buildArena(2).h], [1280, 720]);
+  assert.deepEqual([S.buildArena(7).w, S.buildArena(7).h], [1780, 1000]);
+  for (let n = 2; n <= 7; n++) { const a = S.buildArena(n); assert.ok(Math.abs(a.w / a.h - 16 / 9) < 0.03, 'fits a 16:9 screen'); }
   assert.equal(S.buildArena(1).w, S.buildArena(2).w, 'practice alone still gets the 2-player room');
   assert.equal(newMatch(5).arena.w, S.buildArena(5).w);
 });
@@ -98,7 +99,7 @@ test('platforms and crates are mirror-symmetric and inside the walls', () => {
   for (let n = 2; n <= 7; n++) {
     const a = S.buildArena(n);
     const obs = a.solids.filter((s) => !s.wall);
-    assert.ok(obs.filter((o) => o.kind === 'platform').length >= 6, 'enough platforms');
+    assert.ok(obs.filter((o) => o.kind === 'platform').length >= 5, 'enough platforms');
     const has = (x, y, w, h) => obs.some((o) => Math.abs(o.x - x) < 0.2 && Math.abs(o.y - y) < 0.2 && o.w === w && o.h === h);
     for (const o of obs) {
       assert.ok(has(a.w - o.x - o.w, o.y, o.w, o.h), `mirror missing for ${n} players`);
@@ -117,7 +118,7 @@ test('spawns: one per player, clear of everything, spread out, first two mirrore
     }
     for (let i = 0; i < n; i++)
       for (let j = i + 1; j < n; j++)
-        assert.ok(Math.abs(a.spawns[i].x - a.spawns[j].x) > 250);
+        assert.ok(Math.hypot(a.spawns[i].x - a.spawns[j].x, a.spawns[i].y - a.spawns[j].y) > 200);
     assert.ok(Math.abs(a.spawns[0].x + a.spawns[1].x - a.w) < 0.2 && a.spawns[0].y === a.spawns[1].y);
   }
   const st = S.createMatch(roster(3));
@@ -128,7 +129,7 @@ section('Gravity and recoil');
 
 test('gravity: players fall and come to rest on the floor', () => {
   const st = newMatch(2);
-  put(st, 1, 150, 300, 0);
+  put(st, 1, 60, 300, 0); // clear of the platforms above
   park(st, 2);
   steps(st, 180);
   const p = P(st, 1);
@@ -143,7 +144,7 @@ test('no shooting, no moving: there is no movement input', () => {
   const st = newMatch(2);
   onFloor(st, 1, 150, 0);
   park(st, 2);
-  S.setInput(st, 1, { mx: 1, my: -1, aim: 0 }); // a v1 client or a cheater
+  S.setInput(st, 1, { mx: 1, my: -1, aim: 0, reload: true }); // an old client or a cheater
   steps(st, 120);
   assert.ok(Math.abs(P(st, 1).x - 150) < 0.01 && Math.abs(P(st, 1).y - floorY(st)) < 0.01);
   assert.equal('mx' in P(st, 1).input, false);
@@ -158,24 +159,28 @@ test('a shot kicks the gun the opposite way: down = up, right = left', () => {
   assert.ok(p.vy < -C.RECOIL * 0.9, `vy=${p.vy}`);
   const y0 = p.y;
   steps(st, 10);
-  assert.ok(p.y < y0 - 40, 'flies up');
+  assert.ok(p.y < y0 - 25, `flies up (${y0 - p.y}px)`);
   steps(st, 30); // wait out the cooldown
-  put(st, 1, 900, 150, 0);
+  put(st, 1, st.arena.w / 2, 150, 0);
   fireOnce(st, 1, 0);
   assert.ok(p.vx < -C.RECOIL * 0.9, `vx=${p.vx}`);
 });
 
-test('holding the trigger at the floor climbs; reloading in the air falls', () => {
-  const st = newMatch(2);
-  onFloor(st, 1, 150, DOWN);
-  park(st, 2);
-  S.setInput(st, 1, { aim: DOWN, fire: true });
-  let top = Infinity;
-  for (let i = 0; i < 6 * 18; i++) { S.step(st); top = Math.min(top, P(st, 1).y); }
-  assert.ok(floorY(st) - top > 300, `climbed ${floorY(st) - top}px with one magazine`);
-  assert.equal(P(st, 1).ammo, 0);
-  steps(st, 60);
-  assert.ok(P(st, 1).vy > 0, 'falling while reloading');
+test('fast tapping at the floor climbs, slow tapping sinks, stopping falls', () => {
+  const tap = (every) => {
+    const st = newMatch(2);
+    onFloor(st, 1, 150, DOWN);
+    park(st, 2);
+    for (let i = 0; i < 120; i++) { S.setInput(st, 1, { aim: DOWN, fire: i % every === 0 }); S.step(st); }
+    return st;
+  };
+  const fast = tap(8); // 7.5 taps per second
+  assert.ok(floorY(fast) - P(fast, 1).y > 250, `climbed only ${floorY(fast) - P(fast, 1).y}px`);
+  const slow = tap(30); // 2 taps per second
+  assert.ok(floorY(slow) - P(slow, 1).y < 60, 'slow taps cannot keep you up');
+  S.setInput(fast, 1, { aim: DOWN, fire: false });
+  steps(fast, 30);
+  assert.ok(P(fast, 1).vy > 0, 'falls when you stop shooting');
 });
 
 test('platforms are one-way: fly up through them, land on top', () => {
@@ -250,66 +255,37 @@ test('client prediction uses the same physics as the host (bit-identical)', () =
   }
 });
 
-section('Pistol, ammo and reload');
+section('Pistol: unlimited bullets');
 
-test('magazine of 6, 0.3 s cooldown, automatic 1.1 s reload when empty', () => {
+test('unlimited bullets, no reload, at most 7.5 shots per second', () => {
   const st = newMatch(2);
   onFloor(st, 1, 300, UP); // shooting at the ceiling only pushes us into the floor
   park(st, 2);
-  S.setInput(st, 1, { aim: UP, fire: true }); // hold the trigger
-  const shots = [], reloads = [], reloaded = [];
-  for (let i = 0; i < 200; i++) {
+  S.setInput(st, 1, { aim: UP, fire: true }); // hold the trigger for 10 s
+  const shots = [];
+  for (let i = 0; i < 600; i++) {
     S.step(st);
     for (const e of drain(st)) {
+      assert.ok(e.type !== 'reload', 'there is no reloading');
       if (e.type === 'shot') shots.push(e.tick);
-      if (e.type === 'reload') reloads.push(e.tick);
-      if (e.type === 'reloaded') reloaded.push(e.tick);
     }
   }
-  const firstMag = shots.slice(0, 6);
-  for (let i = 1; i < 6; i++) assert.equal(firstMag[i] - firstMag[i - 1], 18);
-  assert.equal(reloads[0], firstMag[5], 'reload starts automatically on the empty shot');
-  assert.equal(reloaded[0] - reloads[0], 66, 'reload takes 1.1 s');
-  assert.ok(!shots.some((t) => t > reloads[0] && t < reloaded[0]), 'no shots while reloading');
-  assert.equal(shots[6], reloaded[0], 'firing resumes right after the reload');
+  assert.equal(shots.length, 75, 'never runs out: 7.5 per second for 10 s');
+  for (let i = 1; i < shots.length; i++) assert.equal(shots[i] - shots[i - 1], Math.round(C.FIRE_COOLDOWN * 60));
 });
 
-test('manual reload: ignored with a full magazine, refills a partial one', () => {
-  const st = newMatch(2);
-  onFloor(st, 1, 300, UP);
-  park(st, 2);
-  S.setInput(st, 1, { aim: UP, reload: true });
-  S.step(st);
-  assert.ok(!drain(st).some((e) => e.type === 'reload'), 'full magazine: no reload');
-  fireOnce(st, 1, UP);
-  steps(st, 25);
-  fireOnce(st, 1, UP);
-  assert.equal(P(st, 1).ammo, 4);
-  drain(st);
-  S.setInput(st, 1, { aim: UP, reload: true });
-  S.step(st);
-  assert.ok(drain(st).some((e) => e.type === 'reload'));
-  S.setInput(st, 1, { aim: UP, fire: true }); // trying to shoot while reloading
-  steps(st, 64);
-  assert.equal(P(st, 1).ammo, 4, 'cannot shoot during reload');
-  S.setInput(st, 1, { aim: UP, fire: false });
-  steps(st, 1);
-  assert.equal(P(st, 1).ammo, 4, 'still reloading after 65 ticks');
-  steps(st, 1);
-  assert.equal(P(st, 1).ammo, 6, 'refilled after exactly 66 ticks (1.1 s)');
-});
-
-test('the host enforces the cooldown even if fire is spammed', () => {
+test('the host enforces the fire-rate cap even if taps are spammed', () => {
   const st = newMatch(2);
   onFloor(st, 1, 300, UP);
   park(st, 2);
   let shots = 0;
   for (let i = 0; i < 60; i++) {
-    S.setInput(st, 1, { aim: UP, fire: i % 2 === 0 });
+    S.setInput(st, 1, { aim: UP, fire: true });
+    S.setInput(st, 1, { aim: UP, fire: false });
     S.step(st);
     shots += drain(st).filter((e) => e.type === 'shot').length;
   }
-  assert.equal(shots, 4); // t = 0, 0.3, 0.6, 0.9 within one second
+  assert.equal(shots, 8); // one second of tapping on every tick
 });
 
 test('a quick tap between two ticks still fires (input latch)', () => {
@@ -326,8 +302,8 @@ section('Bullets and hits');
 
 test('one hit costs exactly one life and credits the shooter', () => {
   const st = newMatch(2);
-  onFloor(st, 1, 200, 0);
-  onFloor(st, 2, 500, Math.PI);
+  onFloor(st, 1, 60, 0);
+  onFloor(st, 2, 300, Math.PI);
   fireOnce(st, 1, 0);
   const evs = stepUntil(st, hasType('hit'));
   const hit = evs.find((e) => e.type === 'hit');
@@ -341,8 +317,8 @@ test('one hit costs exactly one life and credits the shooter', () => {
 
 test('invulnerability: 1.5 s without damage after a hit, damage again afterwards', () => {
   const st = newMatch(2);
-  onFloor(st, 1, 200, 0);
-  onFloor(st, 2, 420, Math.PI);
+  onFloor(st, 1, 60, 0);
+  onFloor(st, 2, 280, Math.PI);
   fireOnce(st, 1, 0);
   stepUntil(st, hasType('hit'));
   const hitTick = st.tick;
@@ -361,8 +337,8 @@ test('invulnerability: 1.5 s without damage after a hit, damage again afterwards
   S.step(st);
   assert.equal(P(st, 2).invuln, 0, 'window ends after exactly 1.5 s');
   steps(st, 30);
-  onFloor(st, 1, 200, 0);
-  onFloor(st, 2, 420, Math.PI);
+  onFloor(st, 1, 60, 0);
+  onFloor(st, 2, 280, Math.PI);
   fireOnce(st, 1, 0);
   stepUntil(st, hasType('hit'));
   assert.equal(P(st, 2).lives, 3);
@@ -370,8 +346,8 @@ test('invulnerability: 1.5 s without damage after a hit, damage again afterwards
 
 test('a hit knocks the target in the direction of the bullet', () => {
   const st = newMatch(2);
-  onFloor(st, 1, 200, 0);
-  onFloor(st, 2, 500, Math.PI);
+  onFloor(st, 1, 60, 0);
+  onFloor(st, 2, 300, Math.PI);
   fireOnce(st, 1, 0);
   stepUntil(st, hasType('hit'));
   assert.ok(P(st, 2).vx > C.KNOCKBACK_SPEED * 0.9, `vx=${P(st, 2).vx}`);
@@ -417,16 +393,16 @@ test('no self-damage', () => {
   assert.equal(P(st, 1).invuln, 0);
 });
 
-test('bullets expire after 1.3 s', () => {
+test('bullets expire after 1.2 s', () => {
   const st = newMatch(2);
   put(st, 1, 60, 120, 0); // open strip under the ceiling
   park(st, 2);
   fireOnce(st, 1, 0);
   let wallHit = false;
-  for (let i = 1; i < 72; i++) { S.step(st); if (drain(st).some((e) => e.type === 'wall')) wallHit = true; }
-  assert.equal(st.bullets.length, 1, 'still flying at 1.2 s');
+  for (let i = 1; i < 66; i++) { S.step(st); if (drain(st).some((e) => e.type === 'wall')) wallHit = true; }
+  assert.equal(st.bullets.length, 1, 'still flying at 1.1 s');
   steps(st, 10);
-  assert.equal(st.bullets.length, 0, 'gone by 1.35 s');
+  assert.equal(st.bullets.length, 0, 'gone by 1.25 s');
   assert.equal(wallHit, false);
 });
 
@@ -434,8 +410,8 @@ section('Elimination and winning');
 
 test('at 0 lives a player is eliminated, cannot shoot and cannot be hit', () => {
   const st = newMatch(3);
-  onFloor(st, 1, 200, 0);
-  onFloor(st, 2, 500, Math.PI);
+  onFloor(st, 1, 60, 0);
+  onFloor(st, 2, 300, Math.PI);
   park(st, 3);
   P(st, 2).lives = 1;
   fireOnce(st, 1, 0);
@@ -453,7 +429,7 @@ test('at 0 lives a player is eliminated, cannot shoot and cannot be hit', () => 
   assert.equal(st.bullets.filter((b) => b.owner === 2).length, 0);
   // Bullets fly through the eliminated player's position
   steps(st, 60);
-  onFloor(st, 1, 200, 0);
+  onFloor(st, 1, 60, 0);
   const hitsBefore = P(st, 1).hits;
   fireOnce(st, 1, 0);
   steps(st, 30);
@@ -462,16 +438,16 @@ test('at 0 lives a player is eliminated, cannot shoot and cannot be hit', () => 
 
 test('the last player standing wins; placement is the reverse elimination order', () => {
   const st = newMatch(3);
-  onFloor(st, 1, 200, 0);
-  onFloor(st, 2, 500, Math.PI);
+  onFloor(st, 1, 60, 0);
+  onFloor(st, 2, 300, Math.PI);
   park(st, 3);
   P(st, 2).lives = 1;
   P(st, 3).lives = 1;
   fireOnce(st, 1, 0);
   stepUntil(st, hasType('elim')); // player 2 out first
   steps(st, 30);
-  onFloor(st, 1, 200, 0);
-  onFloor(st, 3, 500, Math.PI);
+  onFloor(st, 1, 60, 0);
+  onFloor(st, 3, 300, Math.PI);
   fireOnce(st, 1, 0);
   stepUntil(st, hasType('end'));
   assert.equal(st.phase, 'ended');
@@ -574,10 +550,9 @@ test('untrusted input is sanitized', () => {
   const st = newMatch(2);
   S.setInput(st, 1, { mx: 'a', my: NaN, aim: Infinity, fire: 'yes', reload: {} });
   const inp = P(st, 1).input;
-  assert.deepEqual(Object.keys(inp).sort(), ['aim', 'fire', 'reload']);
+  assert.deepEqual(Object.keys(inp).sort(), ['aim', 'fire']);
   assert.ok(Number.isFinite(inp.aim));
   assert.equal(inp.fire, false);
-  assert.equal(inp.reload, false);
   S.setInput(st, 1, { aim: 7 });
   assert.ok(Math.abs(P(st, 1).input.aim - (7 - 2 * Math.PI)) < 1e-9);
   S.setInput(st, 99, { mx: 1 }); // unknown player: ignored, no throw
@@ -591,6 +566,7 @@ test('snapshots pack compactly (1 decimal) and unpack correctly', () => {
   P(st, 1).vx = -321.06;
   P(st, 1).vy = 12.34;
   const a = S.packPlayer(P(st, 1));
+  assert.equal(a.length, 11);
   assert.equal(a[1], 123.5);
   assert.equal(a[2], 78.9);
   assert.equal(a[3], 1.23);
@@ -600,6 +576,7 @@ test('snapshots pack compactly (1 decimal) and unpack correctly', () => {
   assert.equal(u.lives, 5);
   assert.equal(u.vx, -321.1);
   assert.equal(u.vy, 12.3);
+  assert.equal(u.invuln, 0.8);
   const b = S.unpackBullet(S.packBullet({ id: 7, x: 1.26, y: 2.24, vx: 719.99, vy: -0.04, owner: 1 }));
   assert.deepEqual(b, { id: 7, x: 1.3, y: 2.2, vx: 720, vy: -0, owner: 1 });
 });
