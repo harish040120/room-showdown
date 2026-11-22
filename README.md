@@ -1,13 +1,10 @@
 # Room Showdown
 
-A fast, funny pistol party game for **2 to 7 players** in the browser. **Every player is a
-pistol.** Gravity pulls you down, and the only way to move is the kick of your own shots.
-**Tap anywhere and your gun fires toward that spot:** tap below it to fly up, tap beside it to
-dash the other way. Bullets are unlimited. Everyone has **5 lives**.
-Each hit costs one life. Lose all five and you're out. **Last one standing wins.**
+A fast, funny top-down pistol duel for **2 to 7 players** in the browser. Everyone is locked
+in one room with a pistol and **5 lives**. Each hit costs one life. Lose all five and you're out.
+**Last one standing wins.**
 
-- A small arena that grows a little with the number of players (1280 x 720 for 2, up to 1780 x 1000 for 7), always fully on screen
-- One-tap controls on phones (landscape) and tablets, mouse on desktops
+- Plays on phones (landscape, twin touch sticks), tablets and desktops (keyboard + mouse, or a gamepad)
 - Peer-to-peer multiplayer over WebRTC: **no game server to run or pay for**
 - **Practice vs Bots** (easy / normal / hard) works fully offline
 - No build step, no dependencies, no image or audio files: everything is drawn and synthesized in code
@@ -15,22 +12,19 @@ Each hit costs one life. Lose all five and you're out. **Last one standing wins.
 
 ## How to play
 
-| | Phone / tablet | Mouse + keyboard |
-|---|---|---|
-| Shoot (and move) | tap anywhere: the gun fires toward your tap. Keep the finger down to keep firing | the gun points at the mouse. Click or `Space` (hold to keep firing) |
-| Menu | ☰ button | `Esc` |
-
-There are no joysticks and no movement keys. During a match a strip under the floor stays free,
-so you can always tap below your gun to jump, even when it rests on the floor.
+| | Keyboard + mouse | Phone | Gamepad |
+|---|---|---|---|
+| Move | `WASD` / arrow keys | left thumb stick | left stick |
+| Aim | mouse | right thumb stick | right stick |
+| Shoot | left click (hold to keep firing), `Space` | push the right stick past the dashed ring | RT / RB / A |
+| Reload | `R` (automatic when empty) | round reload button | X |
+| Menu | `Esc` | ☰ button | Start |
 
 Rules:
 
-- Every shot kicks you the opposite way you aim. Shoot down to fly up, shoot right to dash left.
-- You can fly up through platforms and land on top of them. Platforms and crates stop bullets.
-- Unlimited bullets and no reloading. The gun fires at most 7.5 times a second; about 4 taps a second keeps you hovering.
-- Getting hit knocks you in the direction of the bullet
+- 6-shot magazine, 0.35 s between shots, 1.2 s reload
 - After a hit you blink for 1.5 s and can't be hit again
-- Bullets travel about 1,080 px before fading
+- Bullets travel about 1,000 px before fading: no sniping across the whole room
 - A match lasts 3 minutes. When time runs out, most lives wins, then most hits landed. Anything still tied shares the win.
 - The menu does **not** pause the match
 
@@ -94,12 +88,12 @@ short-lived credentials, and never commit a paid account's password to a public 
 index.html          every screen, modal and HUD element
 css/style.css       dark responsive theme (phone landscape to desktop)
 js/config.js        every gameplay, network and look constant
-js/sim.js           PURE simulation: arena builder, gravity + recoil physics, bullets, hits, ranking, packing
+js/sim.js           PURE simulation: movement, collision, bullets, hits, ranking, packing
 js/bots.js          bot AI (produces inputs for the same simulation)
 js/net.js           PeerJS transport: rooms, heartbeats, kicking, reconnecting to signaling
 js/main.js          the controller: modes, host authority, client prediction, render loop
-js/render.js        canvas renderer (whole-arena view, the pistol players) + effects, DOM HUD
-js/input.js         tap / click to shoot toward a spot (no joysticks)
+js/render.js        canvas renderer + effects, DOM HUD
+js/input.js         keyboard, mouse, twin touch sticks, gamepad
 js/audio.js         WebAudio sound synthesizer
 js/ui.js            menu, lobby, results, dialogs, toasts
 sw.js               offline cache for the app shell
@@ -107,15 +101,11 @@ vendor/peerjs.min.js  PeerJS (MIT), for WebRTC signaling
 ```
 
 - **Star topology, host authoritative.** The host simulates at a fixed 60 ticks/s and sends
-  snapshots 20 times a second. Clients send only their aim and trigger 30 times a second, so a
-  modified client can't teleport, fly or fire faster than the host allows. There is no movement
-  input at all: the host computes every kick from the shots it accepts.
-- **Client-side prediction.** Your own flight (gravity, recoil, collisions) runs immediately with the
-  same physics code as the host. Each snapshot says which input the host applied last and how many
-  ticks it has simulated since, so the client replays exactly the ticks the host has not seen yet
-  and smooths away small errors.
-- **Arena from the player count.** The arena is built from the number of players alone, so every
-  peer builds the same one from the roster and nothing extra goes over the network.
+  snapshots 20 times a second. Clients send their input 30 times a second and nothing else, so a
+  modified client can't teleport, speed-hack or fire faster than the host allows. The host also
+  checks and clamps every input it receives.
+- **Client-side prediction.** Your own movement is applied immediately, then reconciled against the
+  host's position (replaying unacknowledged inputs, with smoothing for small errors).
 - **Interpolation.** Other players are drawn ~100 ms in the past, between two snapshots. Hit,
   elimination and shot effects are delayed by the same amount, so they line up with what you see.
 - **One simulation.** `sim.js` uses no DOM, network or `Math.random()`, so the same code runs on
@@ -131,9 +121,8 @@ vendor/peerjs.min.js  PeerJS (MIT), for WebRTC signaling
 npm test
 ```
 
-38 headless tests of the simulation and bots: arena sizes and symmetry, gravity, recoil, one-way
-platforms, client prediction matching the host exactly, lives, unlimited fire and its rate cap, invulnerability,
-point-blank shots into cover, timer tie-breaks, same-tick double knockouts, disconnects, input
+35 headless tests of the simulation and bots: lives, cooldowns, reloads, invulnerability,
+point-blank shots into walls, timer tie-breaks, same-tick double knockouts, disconnects, input
 sanitizing, snapshot packing, and full bot-vs-bot matches (including determinism with a fixed seed).
 
 ## Credits and license

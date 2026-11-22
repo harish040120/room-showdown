@@ -1,7 +1,7 @@
 {
   "name": "Room Showdown",
   "short_name": "Showdown",
-  "description": "A fast, funny pistol party game for 2 to 7 friends: you are a gun, and shooting is the only way to move. Five lives each, last one standing wins.",
+  "description": "A fast, funny top-down pistol duel for 2 to 7 friends. Five lives each, last one standing wins.",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

@@ -4,7 +4,7 @@
 //   'menu'     a muted bot demo plays behind the menu
 //   'practice' local authority: you + bots, fully offline
 //   'host'     local authority + PeerJS host: simulates, broadcasts snapshots and events
-//   'client'   predicts its own flight (gravity + recoil), interpolates everyone else ~100 ms in the past,
+//   'client'   predicts its own movement, interpolates everyone else ~100 ms in the past,
 //              and plays events when that "render time" reaches them (so effects line up)
 
 import { CONFIG } from './config.js';
@@ -34,7 +34,6 @@ const G = {
   screen: 'menu',   // 'menu' | 'lobby' | 'match' | 'results'
   myId: null,
   roster: [],       // [{id, name, color, slot}] of the current match
-  arena: null,      // arena of the current match (its size depends on the player count)
   rosterById: new Map(),
   sim: null,        // authority simulation (practice / host)
   demo: null,       // background bot demo
@@ -59,9 +58,6 @@ const G = {
   welcome: null,
   lastTimerSec: null,
 };
-// Read-only peek for debugging and automated tests. The host stays authoritative either way.
-window.__roomShowdown = G;
-G.toScreen = (x, y) => renderer.worldToScreen(x, y);
 
 // ---------------------------------------------------------------------------
 // Authority simulation wrapper (practice, host, demo)
@@ -105,7 +101,7 @@ function simView(sim) {
   const bullets = st.bullets.map((b) => ({
     owner: b.owner, vx: b.vx, vy: b.vy, x: b.px + (b.x - b.px) * a, y: b.py + (b.y - b.py) * a,
   }));
-  return { arena: st.arena, players, bullets };
+  return { players, bullets };
 }
 
 function setRoster(roster) {
@@ -139,7 +135,7 @@ function demoFrame(now) {
 // ---------------------------------------------------------------------------
 // Effects + sounds from simulation events (shared by every mode)
 // ---------------------------------------------------------------------------
-const panOf = (x) => ((x / (G.arena ? G.arena.w : C.ARENA_BASE_W)) * 2 - 1) * 0.6;
+const panOf = (x) => ((x / C.ARENA_W) * 2 - 1) * 0.6;
 const vibrate = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch { /* ignore */ } };
 
 function infoOf(id, rosterOf) {
@@ -163,6 +159,12 @@ function playEvents(evs, { silent = false, rosterOf = null, skipMyShot = null } 
         if (e.id === me && skipMyShot && skipMyShot()) break; // already shown by client prediction
         fx.muzzle(e.id);
         snd('shot', { pan: panOf(e.x), vol: e.id === me ? 0.9 : 0.55 });
+        break;
+      case 'reload':
+        if (e.id === me) snd('reload');
+        break;
+      case 'reloaded':
+        if (e.id === me) snd('reloaded');
         break;
       case 'wall':
         fx.spark(e.x, e.y);
@@ -217,6 +219,7 @@ function setScreen(name) {
   if (!inMatch) ui.closeAllModals();
   ui.showScreen(inMatch ? null : name);
   input.setEnabled(inMatch && !ui.paused);
+  document.getElementById('btn-reload').classList.toggle('hidden', !(inMatch && input.touchUI));
   document.getElementById('host-notice').classList.toggle('hidden', !(inMatch && G.mode === 'host'));
   renderer.setTopInset(inMatch ? hud.height : 0);
   keepAwake(name !== 'menu');
@@ -236,9 +239,9 @@ function enterMatch() {
   ui.hidePause();
   setScreen('match');
   const me = G.rosterById.get(G.myId);
-  if (me && G.arena) {
-    const sp = G.arena.spawns[G.roster.indexOf(me)];
-    if (sp) input.setAim(sp.aim);
+  if (me) {
+    const sp = S.spawnForJoinIndex(G.roster.indexOf(me));
+    input.setAim(sp.aim);
   }
 }
 
@@ -270,7 +273,6 @@ function teardown() {
   G.pendingEvents = [];
   G.wins = {};
   G.code = '';
-  G.arena = null;
   setRoster([]);
 }
 
@@ -295,7 +297,6 @@ function startPractice(name, botCount, level) {
   const bots = roster.slice(1).map((r, i) => createBot(r.id, level, seed + i * 101));
   setRoster(roster);
   G.sim = makeSim(roster, bots);
-  G.arena = G.sim.state.arena;
   enterMatch();
 }
 
@@ -471,7 +472,6 @@ function hostMessage(msg, peer) {
     if (!Number.isFinite(s) || s <= m.lastSeq) return; // old or duplicate
     m.lastSeq = s;
     m.lastInputAt = performance.now();
-    m.lastInputTick = G.sim.state.tick;
     S.setInput(G.sim.state, id, msg);
   }
 }
@@ -494,7 +494,7 @@ function zeroStaleInputs(st, now) {
     if (!m.peer) continue;
     if (now - m.lastInputAt > C.INPUT_STALE_MS) {
       const p = S.getPlayer(st, m.id);
-      if (p && p.input.fire) p.input = { ...p.input, fire: false };
+      if (p && (p.input.mx || p.input.my || p.input.fire)) p.input = { ...p.input, mx: 0, my: 0, fire: false };
     }
   }
 }
@@ -507,10 +507,9 @@ function hostStart() {
   const roster = [...G.members.values()].sort((a, b) => a.slot - b.slot)
     .map((m) => ({ id: m.id, name: m.name, color: m.color, slot: m.slot }));
   const now = performance.now();
-  for (const m of G.members.values()) { m.spectator = false; m.lastInputAt = now; m.lastSeq = 0; m.lastInputTick = 0; }
+  for (const m of G.members.values()) { m.spectator = false; m.lastInputAt = now; }
   setRoster(roster);
   G.sim = makeSim(roster, []);
-  G.arena = G.sim.state.arena;
   G.pendingEvents = [];
   G.snapAcc = 0;
   G.roomPhase = 'match';
@@ -536,10 +535,7 @@ function broadcastSnapshot() {
     p: st.players.map(S.packPlayer), b: st.bullets.map(S.packBullet), e: G.pendingEvents,
   };
   G.pendingEvents = [];
-  // a = last input applied, at = host ticks simulated since then (for client reconciliation)
-  for (const m of G.members.values()) {
-    if (m.peer) net.send({ ...base, a: m.lastSeq, at: Math.max(0, st.tick - (m.lastInputTick || 0)) }, m.peer);
-  }
+  for (const m of G.members.values()) if (m.peer) net.send({ ...base, a: m.lastSeq }, m.peer);
 }
 
 function inviteUrl() {
@@ -580,17 +576,15 @@ function newClientState() {
     births: new Map(),  // bullet id -> tick fired
     phase: 'countdown', tl: C.MATCH_TIME, cd: C.COUNTDOWN,
     serverMe: null,
-    pred: null,         // predicted body of my player {x, y, vx, vy}
+    pred: null,         // predicted position of my player
     corr: { x: 0, y: 0 },
-    pending: [],        // [{seq, ticks: [{aim, fire}, ...]}] sent but not yet acknowledged
-    unsent: [],         // predicted ticks not sent yet
-    predAcc: 0,
+    pending: [],        // [{seq, moves: [[dx,dy],...]}] sent but not yet acknowledged
+    unsent: [],
     seq: 0,
     sendAcc: 0,
-    fire: false, aim: 0,
+    fire: false, reload: false, mx: 0, my: 0, aim: 0,
     predCd: 0,
     predShots: [],      // local times of shots shown before the host confirmed them
-    stats: { n: 0, sum: 0, max: 0, snaps: 0 }, // prediction error, for debugging (window.__roomShowdown)
   };
 }
 
@@ -653,7 +647,6 @@ function clientMessage(m) {
     case 'start':
       if (!Array.isArray(m.roster)) return;
       setRoster(m.roster);
-      G.arena = S.buildArena(Math.min(m.roster.length, C.MAX_PLAYERS));
       G.cl = newClientState();
       G.roomPhase = 'match';
       enterMatch();
@@ -717,34 +710,20 @@ function clientSnap(m) {
   const sm = players.get(G.myId) || null;
   cl.serverMe = sm;
   if (!sm) return;
-  if (!sm.alive || cl.phase !== 'playing' || !cl.pred || !G.arena) {
-    cl.pred = { x: sm.x, y: sm.y, vx: sm.vx, vy: sm.vy };
+  if (!sm.alive || cl.phase !== 'playing' || !cl.pred) {
+    cl.pred = { x: sm.x, y: sm.y };
     cl.corr.x = cl.corr.y = 0;
     cl.pending = [];
     cl.unsent = [];
     return;
   }
-  // Start from the host's state and replay every predicted tick it has not seen yet.
   const ack = Number(m.a) || 0;
   while (cl.pending.length && cl.pending[0].seq <= ack) cl.pending.shift();
-  const ticks = [];
-  for (const ent of cl.pending) for (const t of ent.ticks) ticks.push(t);
-  for (const t of cl.unsent) ticks.push(t);
-  // The host already simulated `at` ticks after applying the acknowledged input: they cover
-  // our first `at` predicted ticks. Shots in them reach the host later, so keep their kick.
-  const skip = Math.min(ticks.length, Math.max(0, Number(m.at) || 0));
-  const R = { x: sm.x, y: sm.y, vx: sm.vx, vy: sm.vy };
-  for (let i = 0; i < ticks.length; i++) {
-    if (ticks[i].fire) S.applyRecoil(R, ticks[i].aim);
-    if (i >= skip) S.stepBody(R, DT, G.arena);
-  }
-  cl.pred.vx = R.vx;
-  cl.pred.vy = R.vy;
+  const R = { x: sm.x, y: sm.y };
+  for (const ent of cl.pending) for (const [dx, dy] of ent.moves) S.moveCircle(R, dx, dy, C.PLAYER_RADIUS);
+  for (const [dx, dy] of cl.unsent) S.moveCircle(R, dx, dy, C.PLAYER_RADIUS);
   const ex = R.x - cl.pred.x, ey = R.y - cl.pred.y;
-  const err = Math.hypot(ex, ey);
-  cl.stats.n++; cl.stats.sum += err; if (err > cl.stats.max) cl.stats.max = err;
-  if (err > C.RECONCILE_SNAP_PX) {
-    cl.stats.snaps++;
+  if (Math.hypot(ex, ey) > C.RECONCILE_SNAP_PX) {
     cl.pred.x = R.x; cl.pred.y = R.y; cl.corr.x = cl.corr.y = 0;
   } else {
     cl.corr.x = ex; cl.corr.y = ey; // blended in over the next frames
@@ -768,32 +747,27 @@ function clientFrame(now, dt) {
   const scr = cl.pred ? renderer.worldToScreen(cl.pred.x, cl.pred.y) : null;
   const inp = input.sample({ playerScreen: scr });
   cl.aim = inp.aim;
-  if (inRoster) cl.fire = cl.fire || inp.fire;
-
-  // Predict my own flight with the same fixed-step physics as the host. A predicted shot
-  // kicks immediately and shows its flash + sound; the host's echo of it is then skipped.
-  if (canMove && cl.pred && G.arena) {
-    cl.predAcc += dt;
-    let n = 0;
-    while (cl.predAcc >= DT && n < 8) {
-      cl.predAcc -= DT;
-      n++;
-      cl.predCd = Math.max(0, cl.predCd - DT);
-      let fired = false;
-      if (inp.fire && cl.predCd <= 1e-6) {
-        fired = true;
-        cl.predCd = C.FIRE_COOLDOWN;
-        S.applyRecoil(cl.pred, cl.aim);
-        cl.predShots.push(now);
-        renderer.fx.muzzle(G.myId);
-        audio.play('shot', { pan: panOf(cl.pred.x), vol: 0.9 });
-      }
-      S.stepBody(cl.pred, DT, G.arena);
-      cl.unsent.push({ aim: cl.aim, fire: fired });
-    }
-    if (n >= 8) cl.predAcc = 0;
+  if (canMove && cl.pred) {
+    const dx = inp.mx * C.PLAYER_SPEED * dt, dy = inp.my * C.PLAYER_SPEED * dt;
+    S.moveCircle(cl.pred, dx, dy, C.PLAYER_RADIUS);
+    if (dx || dy) cl.unsent.push([dx, dy]);
+    cl.mx = inp.mx; cl.my = inp.my;
   } else {
-    cl.predAcc = 0;
+    if (cl.pred) S.resolveCircle(cl.pred, C.PLAYER_RADIUS);
+    cl.mx = cl.my = 0;
+  }
+  if (inRoster) {
+    cl.fire = cl.fire || inp.fire;
+    cl.reload = cl.reload || inp.reload;
+  }
+
+  // Predicted shot: instant flash + sound; the host's echo of it is then skipped.
+  cl.predCd = Math.max(0, cl.predCd - dt);
+  if (inp.fire && canMove && cl.predCd <= 0 && sm.ammo > 0 && sm.reload === 0) {
+    cl.predCd = C.FIRE_COOLDOWN + 0.01;
+    cl.predShots.push(now);
+    renderer.fx.muzzle(G.myId);
+    audio.play('shot', { pan: cl.pred ? panOf(cl.pred.x) : 0, vol: 0.9 });
   }
 
   // --- send input to the host ---
@@ -801,11 +775,12 @@ function clientFrame(now, dt) {
   if (inRoster && cl.sendAcc >= 1 / C.INPUT_RATE) {
     cl.sendAcc = 0;
     cl.seq++;
-    net.send({ t: 'in', s: cl.seq, aim: S.r3(cl.aim), fire: cl.fire });
-    cl.pending.push({ seq: cl.seq, ticks: cl.unsent });
+    net.send({ t: 'in', s: cl.seq, mx: S.r3(cl.mx), my: S.r3(cl.my), aim: S.r3(cl.aim), fire: cl.fire, reload: cl.reload });
+    cl.pending.push({ seq: cl.seq, moves: cl.unsent });
     if (cl.pending.length > 90) cl.pending.shift();
     cl.unsent = [];
     cl.fire = false;
+    cl.reload = false;
   }
 
   // --- render time & interpolation ---
@@ -855,7 +830,7 @@ function clientFrame(now, dt) {
     else { const back = Math.max(0, b.k - rt) * DT; x = bb.x - bb.vx * back; y = bb.y - bb.vy * back; }
     bullets.push({ owner: bb.owner, vx: bb.vx, vy: bb.vy, x, y });
   }
-  return { arena: G.arena, players, bullets };
+  return { players, bullets };
 }
 
 // ---------------------------------------------------------------------------
@@ -892,6 +867,8 @@ const ui = createUI({
 });
 
 document.getElementById('hud-menu').addEventListener('click', () => ui.showPause());
+const reloadBtn = document.getElementById('btn-reload');
+reloadBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); input.pressReload(); });
 
 // Audio may only start after a user gesture.
 for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, () => audio.unlockAudio(), { passive: true });
@@ -903,11 +880,11 @@ function myHudState() {
   if (G.mode === 'client') {
     const sm = G.cl && G.cl.serverMe;
     if (!sm || !G.rosterById.has(G.myId)) return null;
-    return { lives: sm.lives, alive: sm.alive };
+    return { lives: sm.lives, ammo: sm.ammo, alive: sm.alive, reloadFrac: sm.reload > 0 ? 1 - sm.reload / C.RELOAD_TIME : null };
   }
   const p = G.sim && S.getPlayer(G.sim.state, G.myId);
   if (!p) return null;
-  return { lives: p.lives, alive: p.alive };
+  return { lives: p.lives, ammo: p.ammo, alive: p.alive, reloadFrac: p.reload > 0 ? 1 - p.reload / C.RELOAD_TIME : null };
 }
 
 function pingInfo() {
@@ -975,7 +952,10 @@ function frame(now) {
     const mouseAim = input.aimSource === 'mouse' && !input.touchUI;
     document.body.classList.toggle('mouse-aim', mouseAim && !ui.paused);
     view.crosshair = meView && mouseAim && input.mouse.seen && !ui.paused ? { x: input.mouse.x, y: input.mouse.y } : null;
-    view.tap = meView && input.aimSource === 'touch' ? input.lastTap : null;
+    view.sticks = input.touchUI && meView ? input.sticks : null;
+    view.stickRadius = input.stickRadius();
+    view.fireZone = input.fireZone;
+    view.aimLine = !!meView && input.aimSource !== 'mouse';
   } else if (lastInset !== 0) {
     lastInset = 0;
     renderer.setTopInset(0);

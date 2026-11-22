@@ -2,46 +2,51 @@
 // Pure data with no DOM access, so the simulation and tests can import it in Node too.
 
 export const CONFIG = Object.freeze({
-  VERSION: '3.0.0',
-  PROTOCOL: 3, // bump when the network message format changes
+  VERSION: '1.0.0',
+  PROTOCOL: 1, // bump when the network message format changes
 
-  // ---- Arena (side view, logical units). Small, growing a little with each player. ----
-  // The whole arena is always on screen.
-  ARENA_BASE_W: 1280, // width for 2 players
-  ARENA_BASE_H: 720,
-  ARENA_GROW_W: 100,  // extra width per extra player (7 players: 1780)
-  ARENA_GROW_H: 56,   // extra height per extra player (7 players: 1000)
-  WALL: 26,           // thickness of the floor, ceiling and side walls
-  // Floating platforms: rows from the floor up, mirror-symmetric around the middle.
-  PLATFORM_ROW_GAP: 200,
-  PLATFORM_SPACING: 430,
-  PLATFORM_W: 190,
-  PLATFORM_H: 24,
+  // ---- Arena (logical units; the canvas scales this to fit any screen) ----
+  ARENA_W: 1600,
+  ARENA_H: 900,
+  WALL: 24, // thickness of the border walls
 
-  // ---- Players (each player is a pistol) ----
+  // Cover blocks (axis-aligned rectangles). The layout is mirror-symmetric on both axes.
+  OBSTACLES: [
+    { x: 740, y: 390, w: 120, h: 120 }, // center pillar
+    { x: 430, y: 330, w: 40, h: 240 },  // left bar
+    { x: 1130, y: 330, w: 40, h: 240 }, // right bar
+    { x: 560, y: 200, w: 180, h: 36 },  // top-left
+    { x: 860, y: 200, w: 180, h: 36 },  // top-right
+    { x: 560, y: 664, w: 180, h: 36 },  // bottom-left
+    { x: 860, y: 664, w: 180, h: 36 },  // bottom-right
+  ],
+
+  // 7 spawn points evenly spaced on an ellipse around the arena edge.
+  SPAWN_RX: 680,
+  SPAWN_RY: 340,
+  SPAWN_START_DEG: 167.142857, // makes spawn 0 and spawn 4 mirror images (fair 1v1)
+  // Join order -> spawn point index, chosen so any number of players is spread out.
+  SPAWN_ORDER: [0, 4, 2, 6, 1, 5, 3],
+
+  // ---- Players ----
   MAX_PLAYERS: 7,
   LIVES: 5,
-  PLAYER_RADIUS: 26, // hit and collision circle
+  PLAYER_RADIUS: 18,
+  PLAYER_SPEED: 230, // px per second
 
-  // ---- Physics ----
-  GRAVITY: 1500,        // px/s^2, pulls down
-  RECOIL: 360,          // px/s kick per shot, opposite to the aim (about 4 taps/s to hover)
-  RECOIL_CANCEL: 0.7,   // share of the speed against the kick that a shot cancels first
-  MAX_SPEED: 1100,      // px/s
-  AIR_DRAG: 0.35,       // exponential slow-down per second in the air
-  GROUND_FRICTION: 7,   // exponential slow-down per second while resting on something
-  BOUNCE: 0.3,          // share of speed kept when bouncing off a surface
-
-  // ---- Pistol: unlimited bullets, no reload. Every tap fires toward the tap. ----
-  FIRE_COOLDOWN: 8 / 60, // seconds between shots (8 ticks: at most 7.5 shots per second)
-  BULLET_SPEED: 900,    // px per second
-  BULLET_RADIUS: 5,
-  BULLET_LIFETIME: 1.2, // seconds (range about 1,080 px)
-  MUZZLE_OFFSET: 40,    // distance from the gun's center to its barrel tip
+  // ---- Pistol ----
+  MAG_SIZE: 6,
+  FIRE_COOLDOWN: 0.35, // seconds between shots
+  RELOAD_TIME: 1.2,    // seconds
+  BULLET_SPEED: 720,   // px per second
+  BULLET_RADIUS: 4,
+  BULLET_LIFETIME: 1.4, // seconds
+  MUZZLE_OFFSET: 32,    // distance from player center to the gun tip
 
   // ---- Getting hit ----
   INVULN_TIME: 1.5,     // seconds of invulnerability after a hit
-  KNOCKBACK_SPEED: 420, // speed a hit adds in the bullet's direction (px/s)
+  KNOCKBACK_SPEED: 380, // initial knockback velocity (px/s)
+  KNOCKBACK_DECAY: 10,  // exponential decay rate (higher = shorter nudge)
 
   // ---- Match flow ----
   COUNTDOWN: 3,       // "3-2-1-DUEL!"
@@ -56,7 +61,7 @@ export const CONFIG = Object.freeze({
   RECONCILE_SNAP_PX: 60, // client prediction snaps only if the error is bigger
   HEARTBEAT_MS: 2000,    // ping interval
   TIMEOUT_MS: 8000,      // drop a peer after this much silence
-  INPUT_STALE_MS: 300,   // host releases a client's trigger if inputs stop arriving
+  INPUT_STALE_MS: 300,   // host zeroes a client's movement if inputs stop arriving
   CONNECT_TIMEOUT_MS: 15000,
 
   ROOM_CODE_CHARS: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', // no look-alikes (0/O, 1/I)

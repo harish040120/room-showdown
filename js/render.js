@@ -2,10 +2,10 @@
 // Everything is drawn with shapes and gradients: no image files.
 
 import { CONFIG } from './config.js';
+import { SOLIDS, SPAWNS } from './sim.js';
 
 const C = CONFIG;
-const R = C.PLAYER_RADIUS;
-const GUN_SCALE = R / 20 * 0.8; // the pistol art (made for a radius of 20) scaled to the hit circle
+const AW = C.ARENA_W, AH = C.ARENA_H, R = C.PLAYER_RADIUS;
 const TAU = Math.PI * 2;
 const INK = '#0b0d16';
 
@@ -26,9 +26,6 @@ function colorInfo(hex) {
       base: hex,
       light: rgb(mixRgb(base, [255, 255, 255], 0.45)),
       dark: rgb(mixRgb(base, [0, 0, 0], 0.4)),
-      grip: rgb(mixRgb(base, [0, 0, 0], 0.35)),
-      shine: rgb(mixRgb(base, [255, 255, 255], 0.35)),
-      grooves: rgb(mixRgb(base, [0, 0, 0], 0.3)),
       rgba: (a) => `rgba(${base[0]},${base[1]},${base[2]},${a})`,
     };
     colorCache.set(hex, c);
@@ -63,6 +60,7 @@ export function heartPath(g, x, y, s) {
 export function createRenderer(canvas) {
   const ctx = canvas.getContext('2d', { alpha: false });
   let W = 1, H = 1, dpr = 1, scale = 1, ox = 0, oy = 0, topInset = 0;
+  let arena = null;
   let time = 0;
   let shake = 0;
   let calm = false; // no screen shake (menu background demo)
@@ -80,96 +78,105 @@ export function createRenderer(canvas) {
     canvas.height = Math.round(H * dpr);
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
+    layout();
+  }
+
+  function layout() {
+    const availH = Math.max(1, H - topInset);
+    scale = Math.min(W / AW, availH / AH);
+    ox = (W - AW * scale) / 2;
+    oy = topInset + (availH - AH * scale) / 2;
+    buildArena();
   }
 
   function setTopInset(px) {
-    topInset = Math.round(px);
+    px = Math.round(px);
+    if (px !== topInset) { topInset = px; layout(); }
   }
 
-  // The whole arena is always on screen, as big as the screen allows (below the HUD).
-  // In a match a strip under the floor stays free: a gun resting on the floor needs room
-  // below it to tap (= shoot down = jump).
-  let bottomPad = 0;
-  function updateCamera(arena, inMatch) {
-    bottomPad = inMatch ? Math.round(Math.max(34, Math.min(110, H * 0.13))) : 0;
-    const availH = Math.max(1, H - topInset - bottomPad);
-    scale = Math.min(W / arena.w, availH / arena.h);
-    ox = (W - arena.w * scale) / 2;
-    oy = topInset + (availH - arena.h * scale);
-    // Arena sits right above the free strip; any spare height goes above it.
-  }
+  // Static arena, pre-rendered once per resize at full device resolution.
+  function buildArena() {
+    const pw = Math.max(1, Math.round(AW * scale * dpr));
+    const ph = Math.max(1, Math.round(AH * scale * dpr));
+    if (!arena) arena = document.createElement('canvas');
+    arena.width = pw;
+    arena.height = ph;
+    const g = arena.getContext('2d');
+    g.setTransform(pw / AW, 0, 0, ph / AH, 0, 0);
 
-  // Side-view room: back wall with a faint grid, solid border, floating platforms and crates.
-  function drawArena(arena) {
-    const AW = arena.w, AH = arena.h, t = C.WALL;
-    const bg = ctx.createLinearGradient(0, 0, 0, AH);
-    bg.addColorStop(0, '#141a2e');
-    bg.addColorStop(1, '#1d243a');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, AW, AH);
-    // grid lines only where the camera looks
-    const x0 = Math.max(0, Math.floor(-ox / scale / 50) * 50), x1 = Math.min(AW, (W - ox) / scale);
-    const y0 = Math.max(0, Math.floor((topInset - oy) / scale / 50) * 50), y1 = Math.min(AH, (H - oy) / scale);
-    ctx.strokeStyle = 'rgba(255,255,255,0.035)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (let x = x0; x <= x1; x += 50) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
-    for (let y = y0; y <= y1; y += 50) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
-    ctx.stroke();
-    // big soft "spotlight" so the middle reads as the stage
-    const vg = ctx.createRadialGradient(AW / 2, AH * 0.55, 100, AW / 2, AH * 0.55, Math.max(AW, AH) * 0.75);
-    vg.addColorStop(0, 'rgba(255,190,90,0.05)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.35)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, AW, AH);
+    // floor + soft tiles
+    g.fillStyle = '#1a2034';
+    g.fillRect(0, 0, AW, AH);
+    const T = 50;
+    g.fillStyle = '#1d243a';
+    for (let y = 0; y < AH; y += T) for (let x = (y / T) % 2 ? T : 0; x < AW; x += T * 2) g.fillRect(x, y, T, T);
 
-    for (const o of arena.solids) {
-      if (o.wall) continue;
-      if (o.kind === 'platform') {
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        roundRectPath(ctx, o.x + 4, o.y + 8, o.w, o.h, 6); ctx.fill();
-        const gr = ctx.createLinearGradient(0, o.y, 0, o.y + o.h);
-        gr.addColorStop(0, '#6a77a8');
-        gr.addColorStop(1, '#3b4468');
-        ctx.fillStyle = gr;
-        roundRectPath(ctx, o.x, o.y, o.w, o.h, 6); ctx.fill();
-        ctx.lineWidth = 3; ctx.strokeStyle = '#11152a'; ctx.stroke();
-        ctx.fillStyle = 'rgba(255,200,80,0.55)'; // landing edge
-        ctx.fillRect(o.x + 6, o.y + 3, o.w - 12, 3);
-      } else {
-        // crate
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        roundRectPath(ctx, o.x + 5, o.y + 6, o.w, o.h, 6); ctx.fill();
-        ctx.fillStyle = '#4b5784';
-        roundRectPath(ctx, o.x, o.y, o.w, o.h, 6); ctx.fill();
-        ctx.lineWidth = 3; ctx.strokeStyle = '#11152a'; ctx.stroke();
-        ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 4;
-        ctx.beginPath(); ctx.moveTo(o.x + 10, o.y + 10); ctx.lineTo(o.x + o.w - 10, o.y + o.h - 10);
-        ctx.moveTo(o.x + o.w - 10, o.y + 10); ctx.lineTo(o.x + 10, o.y + o.h - 10); ctx.stroke();
-      }
+    // floor markings
+    g.strokeStyle = 'rgba(255,255,255,0.045)';
+    g.lineWidth = 8;
+    g.beginPath(); g.arc(AW / 2, AH / 2, 230, 0, TAU); g.stroke();
+    g.lineWidth = 4;
+    g.beginPath(); g.moveTo(AW / 2, C.WALL); g.lineTo(AW / 2, AH / 2 - 230); g.moveTo(AW / 2, AH / 2 + 230); g.lineTo(AW / 2, AH - C.WALL); g.stroke();
+    // spawn pads
+    for (const sp of SPAWNS) {
+      g.strokeStyle = 'rgba(255,255,255,0.07)';
+      g.lineWidth = 3;
+      g.beginPath(); g.arc(sp.x, sp.y, 30, 0, TAU); g.stroke();
+      g.fillStyle = 'rgba(255,255,255,0.025)';
+      g.fill();
     }
-    // the ground under the floor (the free tap strip in a match)
-    ctx.fillStyle = '#141a2c';
-    ctx.fillRect(-AW, AH, AW * 3, AH);
+    // vignette
+    const vg = g.createRadialGradient(AW / 2, AH / 2, 200, AW / 2, AH / 2, 950);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.4)');
+    g.fillStyle = vg;
+    g.fillRect(0, 0, AW, AH);
+
+    const obstacles = SOLIDS.filter((s) => !s.wall);
+    // drop shadows
+    g.fillStyle = 'rgba(0,0,0,0.38)';
+    for (const o of obstacles) { roundRectPath(g, o.x + 7, o.y + 10, o.w, o.h, 7); g.fill(); }
+    // blocks
+    for (const o of obstacles) {
+      const gr = g.createLinearGradient(0, o.y, 0, o.y + o.h);
+      gr.addColorStop(0, '#5f6b97');
+      gr.addColorStop(1, '#3b4468');
+      g.fillStyle = gr;
+      roundRectPath(g, o.x, o.y, o.w, o.h, 7);
+      g.fill();
+      g.lineWidth = 3;
+      g.strokeStyle = '#11152a';
+      g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,0.22)';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(o.x + 7, o.y + 4);
+      g.lineTo(o.x + o.w - 7, o.y + 4);
+      g.stroke();
+      // rivets for a little character
+      g.fillStyle = 'rgba(255,255,255,0.16)';
+      const rv = [[o.x + 9, o.y + 10], [o.x + o.w - 9, o.y + 10], [o.x + 9, o.y + o.h - 9], [o.x + o.w - 9, o.y + o.h - 9]];
+      if (o.w >= 40 && o.h >= 36) for (const [x, y] of rv) { g.beginPath(); g.arc(x, y, 2.4, 0, TAU); g.fill(); }
+    }
     // border walls
-    ctx.fillStyle = '#2a3150';
-    ctx.fillRect(0, 0, AW, t); ctx.fillRect(0, AH - t, AW, t); ctx.fillRect(0, 0, t, AH); ctx.fillRect(AW - t, 0, t, AH);
-    ctx.strokeStyle = '#4b578a';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(t - 1.5, t - 1.5, AW - 2 * t + 3, AH - 2 * t + 3);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, AH - t, AW, t); ctx.rect(0, 0, AW, t);
-    ctx.clip();
-    ctx.strokeStyle = 'rgba(255,200,80,0.12)';
-    ctx.lineWidth = 10;
-    ctx.beginPath();
-    for (let x = Math.floor(x0 / 46) * 46 - 60; x < x1 + 60; x += 46) {
-      ctx.moveTo(x, AH - t - 10); ctx.lineTo(x + 40, AH + 20);
-      ctx.moveTo(x, -10); ctx.lineTo(x + 40, t + 20);
-    }
-    ctx.stroke();
-    ctx.restore();
+    const t = C.WALL;
+    g.fillStyle = '#2a3150';
+    g.fillRect(0, 0, AW, t); g.fillRect(0, AH - t, AW, t); g.fillRect(0, 0, t, AH); g.fillRect(AW - t, 0, t, AH);
+    g.strokeStyle = '#4b578a';
+    g.lineWidth = 3;
+    g.strokeRect(t - 1.5, t - 1.5, AW - 2 * t + 3, AH - 2 * t + 3);
+    g.strokeStyle = '#11152a';
+    g.lineWidth = 4;
+    g.strokeRect(2, 2, AW - 4, AH - 4);
+    // stripes on the walls
+    g.save();
+    g.beginPath();
+    g.rect(0, 0, AW, t); g.rect(0, AH - t, AW, t);
+    g.clip();
+    g.strokeStyle = 'rgba(255,200,80,0.10)';
+    g.lineWidth = 10;
+    for (let x = -AH; x < AW + AH; x += 46) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 40, t + 30); g.stroke(); g.beginPath(); g.moveTo(x, AH - t - 10); g.lineTo(x + 40, AH + 20); g.stroke(); }
+    g.restore();
   }
 
   // ---- effects ----
@@ -268,74 +275,95 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  // The player IS a cartoon pistol (design "Classic Pistol"). Art coordinates: the barrel
-  // points to +x, the grip hangs down; (8, 2) is the center of the hit circle.
   function drawPlayer(p, isMe) {
     const col = colorInfo(p.color);
     ctx.save();
     ctx.translate(p.x, p.y);
+    // ground shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.33)';
+    ctx.beginPath(); ctx.ellipse(3, 10, R * 1.02, R * 0.52, 0, 0, TAU); ctx.fill();
+    // "this is you" marker
     if (isMe) {
-      ctx.strokeStyle = col.rgba(0.8);
+      ctx.strokeStyle = col.rgba(0.85);
       ctx.lineWidth = 3;
       ctx.setLineDash([7, 6]);
       ctx.lineDashOffset = -time * 24;
-      ctx.beginPath(); ctx.arc(0, 0, R + 12, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, R + 9, 0, TAU); ctx.stroke();
       ctx.setLineDash([]);
     }
     const invuln = p.invuln > 0;
     if (invuln && Math.floor(time * 14) % 2 === 0) ctx.globalAlpha = 0.35;
 
+    // pistol
+    ctx.save();
     ctx.rotate(p.aim);
-    if (Math.cos(p.aim) < 0) ctx.scale(1, -1); // keep the grip below the barrel when facing left
-    ctx.scale(GUN_SCALE, GUN_SCALE);
-    ctx.translate(-8, -2);
-    ctx.lineJoin = 'round';
-    const outline = (fill, lw = 3) => { ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = lw; ctx.strokeStyle = INK; ctx.stroke(); };
-    // grip
-    ctx.save(); ctx.translate(-14, 6); ctx.rotate(0.22);
-    roundRectPath(ctx, -9, 0, 20, 32, 6); outline(col.grip);
-    ctx.restore();
-    // trigger guard
-    ctx.beginPath(); ctx.arc(6, 12, 8, 0, Math.PI); ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.stroke();
-    // slide
-    roundRectPath(ctx, -28, -14, 62, 22, 6); outline(col.base);
-    ctx.fillStyle = col.shine; ctx.fillRect(-22, -10, 48, 4);
-    ctx.fillStyle = col.grooves;
-    for (let i = 0; i < 4; i++) ctx.fillRect(-22 + i * 5, -2, 2.5, 7);
-    // barrel tip
-    roundRectPath(ctx, 32, -10, 10, 13, 3); outline('#2a3150');
-    if (invuln) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2;
-      roundRectPath(ctx, -32, -18, 70, 30, 9); ctx.stroke();
-    }
-    // muzzle flash
+    roundRectPath(ctx, R - 7, -5, 24, 10, 3);
+    ctx.fillStyle = '#262b40';
+    ctx.fill();
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = INK;
+    ctx.stroke();
+    ctx.fillStyle = '#6a74a3';
+    ctx.fillRect(R - 4, -4, 19, 3);
     const fl = flashes.get(p.id);
     if (fl && fl > time) {
       const k = (fl - time) / 0.07;
       ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = `rgba(255,220,120,${0.95 * k})`;
+      ctx.fillStyle = `rgba(255,220,120,${0.9 * k})`;
       ctx.beginPath();
+      const mx = C.MUZZLE_OFFSET;
       for (let i = 0; i < 10; i++) {
-        const a = (i / 10) * TAU, rr = i % 2 ? 7 : 19 * (0.7 + 0.3 * k);
-        ctx.lineTo(52 + Math.cos(a) * rr, -3.5 + Math.sin(a) * rr * 0.75);
+        const a = (i / 10) * TAU, rr = i % 2 ? 6 : 15 * (0.7 + 0.3 * k);
+        ctx.lineTo(mx + 4 + Math.cos(a) * rr, Math.sin(a) * rr * 0.8);
       }
       ctx.closePath();
       ctx.fill();
       ctx.fillStyle = `rgba(255,255,255,${k})`;
-      ctx.beginPath(); ctx.arc(48, -3.5, 6, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(mx + 3, 0, 5, 0, TAU); ctx.fill();
       ctx.globalCompositeOperation = 'source-over';
     }
-    // number badge on the grip, text kept upright
-    ctx.beginPath(); ctx.arc(-12, 24, 8, 0, TAU); outline('#ffffff', 2.5);
-    const m = ctx.getTransform();
-    const bx = m.a * -12 + m.c * 24 + m.e, by = m.b * -12 + m.d * 24 + m.f;
-    const ks = Math.hypot(m.a, m.b);
-    ctx.setTransform(ks, 0, 0, ks, bx, by);
-    ctx.fillStyle = INK;
-    ctx.font = '800 10.5px system-ui, sans-serif';
+    ctx.restore();
+
+    // body
+    const gr = ctx.createRadialGradient(-6, -7, 2, 0, 0, R + 3);
+    gr.addColorStop(0, col.light);
+    gr.addColorStop(0.55, col.base);
+    gr.addColorStop(1, col.dark);
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = INK;
+    ctx.stroke();
+    if (invuln) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, R + 4, 0, TAU); ctx.stroke();
+    }
+    // hand on the grip
+    const ca = Math.cos(p.aim), sa = Math.sin(p.aim);
+    ctx.fillStyle = col.base;
+    ctx.beginPath(); ctx.arc(ca * (R - 1), sa * (R - 1), 5.5, 0, TAU); ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = INK;
+    ctx.stroke();
+    // eyes look where the gun points
+    for (const s of [-1, 1]) {
+      const a = p.aim + s * 0.55;
+      const ex = Math.cos(a) * 8.5, ey = Math.sin(a) * 8.5;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(ex, ey, 4.4, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#141626';
+      ctx.beginPath(); ctx.arc(ex + ca * 1.7, ey + sa * 1.7, 2.3, 0, TAU); ctx.fill();
+    }
+    // number badge on the back
+    const bx = -ca * 8, by = -sa * 8;
+    ctx.fillStyle = 'rgba(11,13,22,0.75)';
+    ctx.beginPath(); ctx.arc(bx, by, 6.5, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 10px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(p.slot + 1), 0, 1);
+    ctx.fillText(String(p.slot + 1), bx, by + 0.5);
     ctx.restore();
   }
 
@@ -344,7 +372,7 @@ export function createRenderer(canvas) {
     const fontPx = small ? 11 : 13;
     const heartPx = small ? 7 : 9;
     const f = fontPx / scale, hs = heartPx / scale;
-    const baseY = p.y - R - 10 - 7 / scale;
+    const baseY = p.y - R - 7 / scale;
     // hearts
     const gap = hs * 1.2;
     const startX = p.x - (gap * (C.LIVES - 1)) / 2;
@@ -379,6 +407,20 @@ export function createRenderer(canvas) {
     ctx.textAlign = 'left';
     ctx.fillStyle = '#ffffff';
     ctx.fillText(name, lx + bw + pad, y + f * 0.04);
+  }
+
+  function drawAimLine(p) {
+    const col = colorInfo(p.color);
+    const ca = Math.cos(p.aim), sa = Math.sin(p.aim);
+    ctx.save();
+    ctx.strokeStyle = col.rgba(0.35);
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([10, 10]);
+    ctx.beginPath();
+    ctx.moveTo(p.x + ca * (C.MUZZLE_OFFSET + 8), p.y + sa * (C.MUZZLE_OFFSET + 8));
+    ctx.lineTo(p.x + ca * 150, p.y + sa * 150);
+    ctx.stroke();
+    ctx.restore();
   }
 
   function drawParticles() {
@@ -435,22 +477,45 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  // A ring where the screen was tapped, so you see where your shot went.
-  function drawTapMarker(tap) {
-    const age = (performance.now() - tap.t) / 1000;
-    if (age > 0.35) return;
-    const k = age / 0.35;
+  function drawStick(s, hintX, hintY, radius, kind, fireZone) {
     ctx.save();
-    ctx.globalAlpha = 1 - k;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(tap.x, tap.y, 10 + k * 26, 0, TAU); ctx.stroke();
+    if (s.id === null) {
+      // resting hint so players know where to put their thumbs
+      ctx.globalAlpha = 0.16;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(hintX, hintY, radius, 0, TAU); ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `700 ${Math.round(radius * 0.32)}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(kind === 'move' ? 'MOVE' : 'AIM + FIRE', hintX, hintY);
+      ctx.restore();
+      return;
+    }
+    const m = Math.hypot(s.vx, s.vy);
+    const firing = kind === 'aim' && m > fireZone;
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.32)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(s.ox, s.oy, radius, 0, TAU); ctx.fill(); ctx.stroke();
+    if (kind === 'aim') {
+      ctx.setLineDash([5, 6]);
+      ctx.strokeStyle = 'rgba(255,120,120,0.45)';
+      ctx.beginPath(); ctx.arc(s.ox, s.oy, radius * fireZone, 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const kx = s.ox + Math.max(-1, Math.min(1, s.vx)) * radius;
+    const ky = s.oy + Math.max(-1, Math.min(1, s.vy)) * radius;
+    ctx.fillStyle = firing ? 'rgba(255,90,110,0.65)' : 'rgba(255,255,255,0.4)';
+    ctx.beginPath(); ctx.arc(kx, ky, radius * 0.42, 0, TAU); ctx.fill();
     ctx.restore();
   }
 
   /**
    * Draw one frame.
-   * view = { arena, players, bullets, myId, crosshair:{x,y}|null, tap:{x,y,t}|null, labels }
+   * view = { players, bullets, myId, crosshair:{x,y}|null, sticks|null, stickRadius, fireZone, labels }
    */
   function draw(view, dt) {
     time += dt;
@@ -458,14 +523,12 @@ export function createRenderer(canvas) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#0a0d18';
     ctx.fillRect(0, 0, W, H);
-    if (!view.arena) return;
-    updateCamera(view.arena, view.myId !== null && view.myId !== undefined);
 
     const sx = shake ? (Math.random() * 2 - 1) * shake : 0;
     const sy = shake ? (Math.random() * 2 - 1) * shake : 0;
     const k = dpr * scale;
     ctx.setTransform(k, 0, 0, k, dpr * ox + sx * k, dpr * oy + sy * k);
-    drawArena(view.arena);
+    if (arena) ctx.drawImage(arena, 0, 0, AW, AH);
 
     const colorOf = new Map();
     for (const p of view.players) colorOf.set(p.id, p.color);
@@ -475,14 +538,20 @@ export function createRenderer(canvas) {
     if (view.bullets.length) drawBullets(view.bullets, getColor);
 
     const alive = view.players.filter((p) => p.alive);
+    alive.sort((a, b) => a.y - b.y);
     const me = alive.find((p) => p.id === view.myId);
+    if (me && view.aimLine) drawAimLine(me);
     for (const p of alive) drawPlayer(p, p.id === view.myId);
     drawParticles();
     if (view.labels !== false) for (const p of alive) drawLabel(p, p.id === view.myId);
 
     // screen-space overlays
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (view.tap) drawTapMarker(view.tap);
+    if (view.sticks) {
+      const r = view.stickRadius;
+      drawStick(view.sticks.left, r + 24, H - r - 24, r, 'move', view.fireZone);
+      drawStick(view.sticks.right, W - r - 24, H - r - 24, r, 'aim', view.fireZone);
+    }
     if (view.crosshair) drawCrosshair(view.crosshair.x, view.crosshair.y, me ? me.color : null);
   }
 
@@ -507,6 +576,8 @@ export function createHud() {
   const $ = (id) => document.getElementById(id);
   const root = $('hud');
   const heartsEl = $('hud-hearts');
+  const pipsEl = $('hud-pips');
+  const ringEl = $('hud-reload');
   const timerEl = $('hud-timer');
   const boardEl = $('hud-board');
   const pingEl = $('hud-ping');
@@ -516,7 +587,9 @@ export function createHud() {
   const specEl = $('spectate');
 
   heartsEl.innerHTML = Array.from({ length: C.LIVES }, () => `<span class="heart">${HEART_SVG}</span>`).join('');
+  pipsEl.innerHTML = Array.from({ length: C.MAG_SIZE }, () => '<span class="pip"></span>').join('');
   const hearts = [...heartsEl.children];
+  const pips = [...pipsEl.children];
   let last = {};
   let boardKey = '';
   let boardRows = new Map();
@@ -555,7 +628,7 @@ export function createHud() {
   }
 
   /**
-   * m = { me:{lives, alive}|null, timeLeft, players:[...], ping:{text, level},
+   * m = { me:{lives, ammo, reloadFrac, alive}|null, timeLeft, players:[...], ping:{text, level},
    *       spectating: string|null, myId }
    */
   function update(m) {
@@ -566,6 +639,17 @@ export function createHud() {
       heartsEl.classList.toggle('hidden', lives < 0);
       last.lives = lives;
     }
+    const ammo = m.me ? m.me.ammo : -1;
+    if (ammo !== last.ammo) {
+      pips.forEach((p, i) => p.classList.toggle('empty', i >= ammo));
+      last.ammo = ammo;
+    }
+    const reloading = !!(m.me && m.me.reloadFrac !== null && m.me.reloadFrac !== undefined);
+    if (reloading !== last.reloading) { ringEl.classList.toggle('active', reloading); last.reloading = reloading; }
+    if (reloading) ringEl.style.setProperty('--p', String(Math.max(0, Math.min(1, m.me.reloadFrac))));
+    const ammoVisible = !!m.me && m.me.alive;
+    if (ammoVisible !== last.ammoVisible) { pipsEl.parentElement.classList.toggle('hidden', !ammoVisible); last.ammoVisible = ammoVisible; }
+
     const tt = fmtTime(m.timeLeft);
     if (tt !== last.time) { timerEl.textContent = tt; last.time = tt; }
     const low = m.timeLeft <= 10.5 && m.timeLeft > 0;
