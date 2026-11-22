@@ -2,51 +2,50 @@
 // Pure data with no DOM access, so the simulation and tests can import it in Node too.
 
 export const CONFIG = Object.freeze({
-  VERSION: '1.0.0',
-  PROTOCOL: 1, // bump when the network message format changes
+  VERSION: '2.0.0',
+  PROTOCOL: 2, // bump when the network message format changes
 
-  // ---- Arena (logical units; the canvas scales this to fit any screen) ----
-  ARENA_W: 1600,
-  ARENA_H: 900,
-  WALL: 24, // thickness of the border walls
+  // ---- Arena (side view, logical units). It grows with the number of players. ----
+  ARENA_BASE_W: 1800, // width for 2 players
+  ARENA_BASE_H: 1000,
+  ARENA_GROW_W: 320,  // extra width per extra player (7 players: 3400)
+  ARENA_GROW_H: 100,  // extra height per extra player (7 players: 1500)
+  WALL: 28,           // thickness of the floor, ceiling and side walls
+  // Floating platforms: rows from the floor up, mirror-symmetric around the middle.
+  PLATFORM_ROW_GAP: 230,
+  PLATFORM_SPACING: 560,
+  PLATFORM_W: 230,
+  PLATFORM_H: 26,
+  // The camera never shows more than this much of the arena (smaller screens show less).
+  VIEW_W: 1500,
+  VIEW_H: 860,
 
-  // Cover blocks (axis-aligned rectangles). The layout is mirror-symmetric on both axes.
-  OBSTACLES: [
-    { x: 740, y: 390, w: 120, h: 120 }, // center pillar
-    { x: 430, y: 330, w: 40, h: 240 },  // left bar
-    { x: 1130, y: 330, w: 40, h: 240 }, // right bar
-    { x: 560, y: 200, w: 180, h: 36 },  // top-left
-    { x: 860, y: 200, w: 180, h: 36 },  // top-right
-    { x: 560, y: 664, w: 180, h: 36 },  // bottom-left
-    { x: 860, y: 664, w: 180, h: 36 },  // bottom-right
-  ],
-
-  // 7 spawn points evenly spaced on an ellipse around the arena edge.
-  SPAWN_RX: 680,
-  SPAWN_RY: 340,
-  SPAWN_START_DEG: 167.142857, // makes spawn 0 and spawn 4 mirror images (fair 1v1)
-  // Join order -> spawn point index, chosen so any number of players is spread out.
-  SPAWN_ORDER: [0, 4, 2, 6, 1, 5, 3],
-
-  // ---- Players ----
+  // ---- Players (each player is a pistol) ----
   MAX_PLAYERS: 7,
   LIVES: 5,
-  PLAYER_RADIUS: 18,
-  PLAYER_SPEED: 230, // px per second
+  PLAYER_RADIUS: 20, // hit and collision circle
+
+  // ---- Physics ----
+  GRAVITY: 1700,        // px/s^2, pulls down
+  RECOIL: 570,          // px/s kick per shot, opposite to the aim
+  RECOIL_CANCEL: 0.7,   // share of the speed against the kick that a shot cancels first
+  MAX_SPEED: 1300,      // px/s
+  AIR_DRAG: 0.35,       // exponential slow-down per second in the air
+  GROUND_FRICTION: 7,   // exponential slow-down per second while resting on something
+  BOUNCE: 0.3,          // share of speed kept when bouncing off a surface
 
   // ---- Pistol ----
   MAG_SIZE: 6,
-  FIRE_COOLDOWN: 0.35, // seconds between shots
-  RELOAD_TIME: 1.2,    // seconds
-  BULLET_SPEED: 720,   // px per second
+  FIRE_COOLDOWN: 0.3,  // seconds between shots
+  RELOAD_TIME: 1.1,    // seconds
+  BULLET_SPEED: 900,   // px per second
   BULLET_RADIUS: 4,
-  BULLET_LIFETIME: 1.4, // seconds
-  MUZZLE_OFFSET: 32,    // distance from player center to the gun tip
+  BULLET_LIFETIME: 1.3, // seconds (range about 1,170 px)
+  MUZZLE_OFFSET: 30,    // distance from the gun's center to its barrel tip
 
   // ---- Getting hit ----
   INVULN_TIME: 1.5,     // seconds of invulnerability after a hit
-  KNOCKBACK_SPEED: 380, // initial knockback velocity (px/s)
-  KNOCKBACK_DECAY: 10,  // exponential decay rate (higher = shorter nudge)
+  KNOCKBACK_SPEED: 480, // speed a hit adds in the bullet's direction (px/s)
 
   // ---- Match flow ----
   COUNTDOWN: 3,       // "3-2-1-DUEL!"
@@ -61,7 +60,7 @@ export const CONFIG = Object.freeze({
   RECONCILE_SNAP_PX: 60, // client prediction snaps only if the error is bigger
   HEARTBEAT_MS: 2000,    // ping interval
   TIMEOUT_MS: 8000,      // drop a peer after this much silence
-  INPUT_STALE_MS: 300,   // host zeroes a client's movement if inputs stop arriving
+  INPUT_STALE_MS: 300,   // host releases a client's trigger if inputs stop arriving
   CONNECT_TIMEOUT_MS: 15000,
 
   ROOM_CODE_CHARS: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', // no look-alikes (0/O, 1/I)

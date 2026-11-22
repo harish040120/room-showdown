@@ -1,7 +1,8 @@
 // Room Showdown: input from keyboard + mouse, twin virtual joysticks (touch) and gamepads.
-// Produces one sample per frame: { mx, my, aim, fire, reload } with |(mx,my)| <= 1.
+// Produces one sample per frame: { aim, fire, reload }. There is no movement input:
+// players move only with the recoil of their shots.
 
-const MOVE_KEYS = {
+const AIM_KEYS = {
   KeyW: [0, -1], ArrowUp: [0, -1],
   KeyS: [0, 1], ArrowDown: [0, 1],
   KeyA: [-1, 0], ArrowLeft: [-1, 0],
@@ -43,7 +44,7 @@ export function createInput(canvas, { onMenu } = {}) {
     if (e.code === 'Escape') { if (onMenu) onMenu(); return; }
     if (isTyping()) return;
     if (!state.enabled) return;
-    if (MOVE_KEYS[e.code] || e.code === 'Space') e.preventDefault();
+    if (AIM_KEYS[e.code] || e.code === 'Space') e.preventDefault();
     keys.add(e.code);
     if (e.code === 'KeyR' && !e.repeat) state.reloadTap = true;
     if (e.code === 'Space') { state.fireTap = true; }
@@ -81,7 +82,7 @@ export function createInput(canvas, { onMenu } = {}) {
       state.aimSource = 'mouse';
       return;
     }
-    // touch / pen: left half moves, right half aims and fires
+    // touch / pen: left half aims (no firing), right half aims and fires
     e.preventDefault();
     state.touchSeen = true;
     state.aimSource = 'touch';
@@ -155,22 +156,23 @@ export function createInput(canvas, { onMenu } = {}) {
    * (for mouse aiming). `ctx.aim` = current aim used when no device gives a new one.
    */
   function sample(ctx = {}) {
-    const out = { mx: 0, my: 0, aim: state.lastAim, fire: false, reload: false };
+    const out = { aim: state.lastAim, fire: false, reload: false };
     if (!state.enabled) {
       state.fireTap = state.reloadTap = false;
       return out;
     }
-    // movement: keyboard + left stick + gamepad (summed, clamped)
+    // Keyboard aim (8 directions): WASD / arrow keys. Used when there is no mouse.
+    let kx = 0, ky = 0;
     for (const k of keys) {
-      const v = MOVE_KEYS[k];
-      if (v) { out.mx += v[0]; out.my += v[1]; }
+      const v = AIM_KEYS[k];
+      if (v) { kx += v[0]; ky += v[1]; }
     }
+    if (kx || ky) { out.aim = Math.atan2(ky, kx); state.aimSource = 'keys'; }
+    // Left touch stick and the gamepad's left stick aim without firing.
     const L = state.sticks.left;
-    if (L.id !== null) { out.mx += L.vx; out.my += L.vy; }
+    if (L.id !== null && Math.hypot(L.vx, L.vy) > AIM_ZONE) out.aim = Math.atan2(L.vy, L.vx);
     const pad = readPad();
-    if (pad) { out.mx += pad.lx; out.my += pad.ly; }
-    const len = Math.hypot(out.mx, out.my);
-    if (len > 1) { out.mx /= len; out.my /= len; }
+    if (pad && Math.hypot(pad.lx, pad.ly) > 0) { state.aimSource = 'pad'; out.aim = Math.atan2(pad.ly, pad.lx); }
 
     // aim + fire
     const Rs = state.sticks.right;
@@ -186,7 +188,7 @@ export function createInput(canvas, { onMenu } = {}) {
       const m = Math.hypot(Rs.vx, Rs.vy);
       if (m > AIM_ZONE) out.aim = Math.atan2(Rs.vy, Rs.vx);
       if (m > FIRE_ZONE) fire = true;
-    } else if (state.aimSource === 'mouse' && ctx.playerScreen && state.mouse.seen) {
+    } else if (state.aimSource === 'mouse' && ctx.playerScreen && state.mouse.seen && !kx && !ky) {
       out.aim = Math.atan2(state.mouse.y - ctx.playerScreen.y, state.mouse.x - ctx.playerScreen.x);
     }
     if (state.mouse.down) fire = true;

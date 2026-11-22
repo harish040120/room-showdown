@@ -2,10 +2,11 @@
 // Everything is drawn with shapes and gradients: no image files.
 
 import { CONFIG } from './config.js';
-import { SOLIDS, SPAWNS } from './sim.js';
 
 const C = CONFIG;
-const AW = C.ARENA_W, AH = C.ARENA_H, R = C.PLAYER_RADIUS;
+const R = C.PLAYER_RADIUS;
+const GUN_SCALE = 0.8; // the pistol art is drawn at this scale around its center
+const MIN_FOLLOW_SCALE = 0.62; // closest zoom-out while the camera follows you
 const TAU = Math.PI * 2;
 const INK = '#0b0d16';
 
@@ -26,6 +27,9 @@ function colorInfo(hex) {
       base: hex,
       light: rgb(mixRgb(base, [255, 255, 255], 0.45)),
       dark: rgb(mixRgb(base, [0, 0, 0], 0.4)),
+      grip: rgb(mixRgb(base, [0, 0, 0], 0.35)),
+      shine: rgb(mixRgb(base, [255, 255, 255], 0.35)),
+      grooves: rgb(mixRgb(base, [0, 0, 0], 0.3)),
       rgba: (a) => `rgba(${base[0]},${base[1]},${base[2]},${a})`,
     };
     colorCache.set(hex, c);
@@ -60,7 +64,8 @@ export function heartPath(g, x, y, s) {
 export function createRenderer(canvas) {
   const ctx = canvas.getContext('2d', { alpha: false });
   let W = 1, H = 1, dpr = 1, scale = 1, ox = 0, oy = 0, topInset = 0;
-  let arena = null;
+  // Camera: world point at the center of the play area, smoothed between frames.
+  const cam = { x: 0, y: 0, s: 1, arena: null, focus: false };
   let time = 0;
   let shake = 0;
   let calm = false; // no screen shake (menu background demo)
@@ -78,105 +83,125 @@ export function createRenderer(canvas) {
     canvas.height = Math.round(H * dpr);
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
-    layout();
-  }
-
-  function layout() {
-    const availH = Math.max(1, H - topInset);
-    scale = Math.min(W / AW, availH / AH);
-    ox = (W - AW * scale) / 2;
-    oy = topInset + (availH - AH * scale) / 2;
-    buildArena();
+    cam.arena = null; // re-center instantly
   }
 
   function setTopInset(px) {
-    px = Math.round(px);
-    if (px !== topInset) { topInset = px; layout(); }
+    topInset = Math.round(px);
   }
 
-  // Static arena, pre-rendered once per resize at full device resolution.
-  function buildArena() {
-    const pw = Math.max(1, Math.round(AW * scale * dpr));
-    const ph = Math.max(1, Math.round(AH * scale * dpr));
-    if (!arena) arena = document.createElement('canvas');
-    arena.width = pw;
-    arena.height = ph;
-    const g = arena.getContext('2d');
-    g.setTransform(pw / AW, 0, 0, ph / AH, 0, 0);
-
-    // floor + soft tiles
-    g.fillStyle = '#1a2034';
-    g.fillRect(0, 0, AW, AH);
-    const T = 50;
-    g.fillStyle = '#1d243a';
-    for (let y = 0; y < AH; y += T) for (let x = (y / T) % 2 ? T : 0; x < AW; x += T * 2) g.fillRect(x, y, T, T);
-
-    // floor markings
-    g.strokeStyle = 'rgba(255,255,255,0.045)';
-    g.lineWidth = 8;
-    g.beginPath(); g.arc(AW / 2, AH / 2, 230, 0, TAU); g.stroke();
-    g.lineWidth = 4;
-    g.beginPath(); g.moveTo(AW / 2, C.WALL); g.lineTo(AW / 2, AH / 2 - 230); g.moveTo(AW / 2, AH / 2 + 230); g.lineTo(AW / 2, AH - C.WALL); g.stroke();
-    // spawn pads
-    for (const sp of SPAWNS) {
-      g.strokeStyle = 'rgba(255,255,255,0.07)';
-      g.lineWidth = 3;
-      g.beginPath(); g.arc(sp.x, sp.y, 30, 0, TAU); g.stroke();
-      g.fillStyle = 'rgba(255,255,255,0.025)';
-      g.fill();
+  /**
+   * Follow `focus` (the local player) with the camera, or show the whole arena when
+   * there is no focus (spectating, menu demo). Never shows outside the arena when the
+   * arena is bigger than the screen.
+   */
+  function updateCamera(arena, focus, dt) {
+    const availH = Math.max(1, H - topInset);
+    // Following: show at most VIEW_W x VIEW_H, but zoom in on small screens so the guns stay
+    // big enough to read on a phone. Overview: the whole arena.
+    const s = focus
+      ? Math.max(MIN_FOLLOW_SCALE, Math.min(W / Math.min(arena.w, C.VIEW_W), availH / Math.min(arena.h, C.VIEW_H)))
+      : Math.min(W / arena.w, availH / arena.h);
+    const visW = W / s, visH = availH / s;
+    // While following, the camera may look a little past the walls, and further below the
+    // floor: a gun resting on the floor then has room under it to aim down (= jump) with a mouse.
+    const padX = focus ? 60 : 0, padTop = focus ? 60 : 0, padBottom = focus ? Math.min(240, visH * 0.3) : 0;
+    const fitX = (v, vis) => (vis >= arena.w + 2 * padX ? arena.w / 2 : Math.max(vis / 2 - padX, Math.min(arena.w + padX - vis / 2, v)));
+    const fitY = (v, vis) => (vis >= arena.h + padTop + padBottom ? (arena.h + padBottom - padTop) / 2 : Math.max(vis / 2 - padTop, Math.min(arena.h + padBottom - vis / 2, v)));
+    const tx = fitX(focus ? focus.x : arena.w / 2, visW);
+    const ty = fitY(focus ? focus.y : arena.h / 2, visH);
+    if (cam.arena !== arena || cam.focus !== !!focus) {
+      // New arena or switching between follow and overview: glide the zoom, jump otherwise.
+      if (cam.arena !== arena) { cam.x = tx; cam.y = ty; cam.s = s; }
+      cam.arena = arena;
+      cam.focus = !!focus;
     }
-    // vignette
-    const vg = g.createRadialGradient(AW / 2, AH / 2, 200, AW / 2, AH / 2, 950);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.4)');
-    g.fillStyle = vg;
-    g.fillRect(0, 0, AW, AH);
+    const k = 1 - Math.exp(-dt * 9);
+    cam.x += (tx - cam.x) * k;
+    cam.y += (ty - cam.y) * k;
+    cam.s += (s - cam.s) * (1 - Math.exp(-dt * 5));
+    // Re-clamp with the smoothed zoom so the edges never show the void.
+    cam.x = fitX(cam.x, W / cam.s);
+    cam.y = fitY(cam.y, availH / cam.s);
+    scale = cam.s;
+    ox = W / 2 - cam.x * scale;
+    oy = topInset + availH / 2 - cam.y * scale;
+  }
 
-    const obstacles = SOLIDS.filter((s) => !s.wall);
-    // drop shadows
-    g.fillStyle = 'rgba(0,0,0,0.38)';
-    for (const o of obstacles) { roundRectPath(g, o.x + 7, o.y + 10, o.w, o.h, 7); g.fill(); }
-    // blocks
-    for (const o of obstacles) {
-      const gr = g.createLinearGradient(0, o.y, 0, o.y + o.h);
-      gr.addColorStop(0, '#5f6b97');
-      gr.addColorStop(1, '#3b4468');
-      g.fillStyle = gr;
-      roundRectPath(g, o.x, o.y, o.w, o.h, 7);
-      g.fill();
-      g.lineWidth = 3;
-      g.strokeStyle = '#11152a';
-      g.stroke();
-      g.strokeStyle = 'rgba(255,255,255,0.22)';
-      g.lineWidth = 2;
-      g.beginPath();
-      g.moveTo(o.x + 7, o.y + 4);
-      g.lineTo(o.x + o.w - 7, o.y + 4);
-      g.stroke();
-      // rivets for a little character
-      g.fillStyle = 'rgba(255,255,255,0.16)';
-      const rv = [[o.x + 9, o.y + 10], [o.x + o.w - 9, o.y + 10], [o.x + 9, o.y + o.h - 9], [o.x + o.w - 9, o.y + o.h - 9]];
-      if (o.w >= 40 && o.h >= 36) for (const [x, y] of rv) { g.beginPath(); g.arc(x, y, 2.4, 0, TAU); g.fill(); }
+  // Side-view room: back wall with a faint grid, solid border, floating platforms and crates.
+  function drawArena(arena) {
+    const AW = arena.w, AH = arena.h, t = C.WALL;
+    const bg = ctx.createLinearGradient(0, 0, 0, AH);
+    bg.addColorStop(0, '#141a2e');
+    bg.addColorStop(1, '#1d243a');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, AW, AH);
+    // grid lines only where the camera looks
+    const x0 = Math.max(0, Math.floor(-ox / scale / 50) * 50), x1 = Math.min(AW, (W - ox) / scale);
+    const y0 = Math.max(0, Math.floor((topInset - oy) / scale / 50) * 50), y1 = Math.min(AH, (H - oy) / scale);
+    ctx.strokeStyle = 'rgba(255,255,255,0.035)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = x0; x <= x1; x += 50) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+    for (let y = y0; y <= y1; y += 50) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
+    ctx.stroke();
+    // big soft "spotlight" so the middle reads as the stage
+    const vg = ctx.createRadialGradient(AW / 2, AH * 0.55, 100, AW / 2, AH * 0.55, Math.max(AW, AH) * 0.75);
+    vg.addColorStop(0, 'rgba(255,190,90,0.05)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, AW, AH);
+
+    for (const o of arena.solids) {
+      if (o.wall) continue;
+      if (o.kind === 'platform') {
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        roundRectPath(ctx, o.x + 4, o.y + 8, o.w, o.h, 6); ctx.fill();
+        const gr = ctx.createLinearGradient(0, o.y, 0, o.y + o.h);
+        gr.addColorStop(0, '#6a77a8');
+        gr.addColorStop(1, '#3b4468');
+        ctx.fillStyle = gr;
+        roundRectPath(ctx, o.x, o.y, o.w, o.h, 6); ctx.fill();
+        ctx.lineWidth = 3; ctx.strokeStyle = '#11152a'; ctx.stroke();
+        ctx.fillStyle = 'rgba(255,200,80,0.55)'; // landing edge
+        ctx.fillRect(o.x + 6, o.y + 3, o.w - 12, 3);
+      } else {
+        // crate
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        roundRectPath(ctx, o.x + 5, o.y + 6, o.w, o.h, 6); ctx.fill();
+        ctx.fillStyle = '#4b5784';
+        roundRectPath(ctx, o.x, o.y, o.w, o.h, 6); ctx.fill();
+        ctx.lineWidth = 3; ctx.strokeStyle = '#11152a'; ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(o.x + 10, o.y + 10); ctx.lineTo(o.x + o.w - 10, o.y + o.h - 10);
+        ctx.moveTo(o.x + o.w - 10, o.y + 10); ctx.lineTo(o.x + 10, o.y + o.h - 10); ctx.stroke();
+      }
     }
+    // ground below the floor (visible when the camera looks under it)
+    ctx.fillStyle = '#121729';
+    ctx.fillRect(-400, AH, AW + 800, 600);
+    ctx.fillRect(-400, -600, AW + 800, 600);
+    ctx.fillRect(-400, 0, 400, AH);
+    ctx.fillRect(AW, 0, 400, AH);
     // border walls
-    const t = C.WALL;
-    g.fillStyle = '#2a3150';
-    g.fillRect(0, 0, AW, t); g.fillRect(0, AH - t, AW, t); g.fillRect(0, 0, t, AH); g.fillRect(AW - t, 0, t, AH);
-    g.strokeStyle = '#4b578a';
-    g.lineWidth = 3;
-    g.strokeRect(t - 1.5, t - 1.5, AW - 2 * t + 3, AH - 2 * t + 3);
-    g.strokeStyle = '#11152a';
-    g.lineWidth = 4;
-    g.strokeRect(2, 2, AW - 4, AH - 4);
-    // stripes on the walls
-    g.save();
-    g.beginPath();
-    g.rect(0, 0, AW, t); g.rect(0, AH - t, AW, t);
-    g.clip();
-    g.strokeStyle = 'rgba(255,200,80,0.10)';
-    g.lineWidth = 10;
-    for (let x = -AH; x < AW + AH; x += 46) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 40, t + 30); g.stroke(); g.beginPath(); g.moveTo(x, AH - t - 10); g.lineTo(x + 40, AH + 20); g.stroke(); }
-    g.restore();
+    ctx.fillStyle = '#2a3150';
+    ctx.fillRect(0, 0, AW, t); ctx.fillRect(0, AH - t, AW, t); ctx.fillRect(0, 0, t, AH); ctx.fillRect(AW - t, 0, t, AH);
+    ctx.strokeStyle = '#4b578a';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(t - 1.5, t - 1.5, AW - 2 * t + 3, AH - 2 * t + 3);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, AH - t, AW, t); ctx.rect(0, 0, AW, t);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(255,200,80,0.12)';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    for (let x = Math.floor(x0 / 46) * 46 - 60; x < x1 + 60; x += 46) {
+      ctx.moveTo(x, AH - t - 10); ctx.lineTo(x + 40, AH + 20);
+      ctx.moveTo(x, -10); ctx.lineTo(x + 40, t + 20);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 
   // ---- effects ----
@@ -275,96 +300,102 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
+  // The player IS a cartoon pistol (design "Classic Pistol"). Art coordinates: the barrel
+  // points to +x, the grip hangs down; (8, 2) is the center of the hit circle.
   function drawPlayer(p, isMe) {
     const col = colorInfo(p.color);
     ctx.save();
     ctx.translate(p.x, p.y);
-    // ground shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.33)';
-    ctx.beginPath(); ctx.ellipse(3, 10, R * 1.02, R * 0.52, 0, 0, TAU); ctx.fill();
-    // "this is you" marker
     if (isMe) {
-      ctx.strokeStyle = col.rgba(0.85);
+      ctx.strokeStyle = col.rgba(0.8);
       ctx.lineWidth = 3;
       ctx.setLineDash([7, 6]);
       ctx.lineDashOffset = -time * 24;
-      ctx.beginPath(); ctx.arc(0, 0, R + 9, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, R + 14, 0, TAU); ctx.stroke();
       ctx.setLineDash([]);
     }
     const invuln = p.invuln > 0;
     if (invuln && Math.floor(time * 14) % 2 === 0) ctx.globalAlpha = 0.35;
 
-    // pistol
-    ctx.save();
     ctx.rotate(p.aim);
-    roundRectPath(ctx, R - 7, -5, 24, 10, 3);
-    ctx.fillStyle = '#262b40';
-    ctx.fill();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = INK;
-    ctx.stroke();
-    ctx.fillStyle = '#6a74a3';
-    ctx.fillRect(R - 4, -4, 19, 3);
+    if (Math.cos(p.aim) < 0) ctx.scale(1, -1); // keep the grip below the barrel when facing left
+    ctx.scale(GUN_SCALE, GUN_SCALE);
+    ctx.translate(-8, -2);
+    ctx.lineJoin = 'round';
+    const outline = (fill, lw = 3) => { ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = lw; ctx.strokeStyle = INK; ctx.stroke(); };
+    // grip
+    ctx.save(); ctx.translate(-14, 6); ctx.rotate(0.22);
+    roundRectPath(ctx, -9, 0, 20, 32, 6); outline(col.grip);
+    ctx.restore();
+    // trigger guard
+    ctx.beginPath(); ctx.arc(6, 12, 8, 0, Math.PI); ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.stroke();
+    // slide
+    roundRectPath(ctx, -28, -14, 62, 22, 6); outline(col.base);
+    ctx.fillStyle = col.shine; ctx.fillRect(-22, -10, 48, 4);
+    ctx.fillStyle = col.grooves;
+    for (let i = 0; i < 4; i++) ctx.fillRect(-22 + i * 5, -2, 2.5, 7);
+    // barrel tip
+    roundRectPath(ctx, 32, -10, 10, 13, 3); outline('#2a3150');
+    if (invuln) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2;
+      roundRectPath(ctx, -32, -18, 70, 30, 9); ctx.stroke();
+    }
+    // muzzle flash
     const fl = flashes.get(p.id);
     if (fl && fl > time) {
       const k = (fl - time) / 0.07;
       ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = `rgba(255,220,120,${0.9 * k})`;
+      ctx.fillStyle = `rgba(255,220,120,${0.95 * k})`;
       ctx.beginPath();
-      const mx = C.MUZZLE_OFFSET;
       for (let i = 0; i < 10; i++) {
-        const a = (i / 10) * TAU, rr = i % 2 ? 6 : 15 * (0.7 + 0.3 * k);
-        ctx.lineTo(mx + 4 + Math.cos(a) * rr, Math.sin(a) * rr * 0.8);
+        const a = (i / 10) * TAU, rr = i % 2 ? 7 : 19 * (0.7 + 0.3 * k);
+        ctx.lineTo(52 + Math.cos(a) * rr, -3.5 + Math.sin(a) * rr * 0.75);
       }
       ctx.closePath();
       ctx.fill();
       ctx.fillStyle = `rgba(255,255,255,${k})`;
-      ctx.beginPath(); ctx.arc(mx + 3, 0, 5, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(48, -3.5, 6, 0, TAU); ctx.fill();
       ctx.globalCompositeOperation = 'source-over';
     }
-    ctx.restore();
-
-    // body
-    const gr = ctx.createRadialGradient(-6, -7, 2, 0, 0, R + 3);
-    gr.addColorStop(0, col.light);
-    gr.addColorStop(0.55, col.base);
-    gr.addColorStop(1, col.dark);
-    ctx.fillStyle = gr;
-    ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = INK;
-    ctx.stroke();
-    if (invuln) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(0, 0, R + 4, 0, TAU); ctx.stroke();
-    }
-    // hand on the grip
-    const ca = Math.cos(p.aim), sa = Math.sin(p.aim);
-    ctx.fillStyle = col.base;
-    ctx.beginPath(); ctx.arc(ca * (R - 1), sa * (R - 1), 5.5, 0, TAU); ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = INK;
-    ctx.stroke();
-    // eyes look where the gun points
-    for (const s of [-1, 1]) {
-      const a = p.aim + s * 0.55;
-      const ex = Math.cos(a) * 8.5, ey = Math.sin(a) * 8.5;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath(); ctx.arc(ex, ey, 4.4, 0, TAU); ctx.fill();
-      ctx.fillStyle = '#141626';
-      ctx.beginPath(); ctx.arc(ex + ca * 1.7, ey + sa * 1.7, 2.3, 0, TAU); ctx.fill();
-    }
-    // number badge on the back
-    const bx = -ca * 8, by = -sa * 8;
-    ctx.fillStyle = 'rgba(11,13,22,0.75)';
-    ctx.beginPath(); ctx.arc(bx, by, 6.5, 0, TAU); ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 10px system-ui, sans-serif';
+    // number badge on the grip, text kept upright
+    ctx.beginPath(); ctx.arc(-12, 24, 8, 0, TAU); outline('#ffffff', 2.5);
+    const m = ctx.getTransform();
+    const bx = m.a * -12 + m.c * 24 + m.e, by = m.b * -12 + m.d * 24 + m.f;
+    const ks = Math.hypot(m.a, m.b);
+    ctx.setTransform(ks, 0, 0, ks, bx, by);
+    ctx.fillStyle = INK;
+    ctx.font = '800 10.5px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(p.slot + 1), bx, by + 0.5);
+    ctx.fillText(String(p.slot + 1), 0, 1);
     ctx.restore();
+  }
+
+  // Arrows at the screen edge pointing to players the camera cannot see.
+  function drawOffscreen(players, myId) {
+    const pad = 22, top = topInset + pad;
+    for (const p of players) {
+      if (p.id === myId) continue;
+      const sx = ox + p.x * scale, sy = oy + p.y * scale;
+      if (sx >= 0 && sx <= W && sy >= topInset && sy <= H) continue;
+      const cx = Math.max(pad, Math.min(W - pad, sx));
+      const cy = Math.max(top, Math.min(H - pad, sy));
+      const a = Math.atan2(sy - cy, sx - cx);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(a);
+      ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-6, -10); ctx.lineTo(-6, 10); ctx.closePath();
+      ctx.fillStyle = p.color; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '800 11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const lx = cx - Math.cos(a) * 16, ly = cy - Math.sin(a) * 16;
+      ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.strokeText(String(p.slot + 1), lx, ly);
+      ctx.fillText(String(p.slot + 1), lx, ly);
+    }
   }
 
   function drawLabel(p, isMe) {
@@ -372,7 +403,7 @@ export function createRenderer(canvas) {
     const fontPx = small ? 11 : 13;
     const heartPx = small ? 7 : 9;
     const f = fontPx / scale, hs = heartPx / scale;
-    const baseY = p.y - R - 7 / scale;
+    const baseY = p.y - R - 12 - 7 / scale;
     // hearts
     const gap = hs * 1.2;
     const startX = p.x - (gap * (C.LIVES - 1)) / 2;
@@ -417,8 +448,15 @@ export function createRenderer(canvas) {
     ctx.lineWidth = 2.5;
     ctx.setLineDash([10, 10]);
     ctx.beginPath();
-    ctx.moveTo(p.x + ca * (C.MUZZLE_OFFSET + 8), p.y + sa * (C.MUZZLE_OFFSET + 8));
-    ctx.lineTo(p.x + ca * 150, p.y + sa * 150);
+    ctx.moveTo(p.x + ca * (C.MUZZLE_OFFSET + 14), p.y + sa * (C.MUZZLE_OFFSET + 14));
+    ctx.lineTo(p.x + ca * 170, p.y + sa * 170);
+    // recoil hint: a short arrow the other way shows where the shot will push you
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+    ctx.beginPath();
+    ctx.moveTo(p.x - ca * (R + 10), p.y - sa * (R + 10));
+    ctx.lineTo(p.x - ca * (R + 34), p.y - sa * (R + 34));
+    ctx.stroke();
     ctx.stroke();
     ctx.restore();
   }
@@ -489,7 +527,7 @@ export function createRenderer(canvas) {
       ctx.font = `700 ${Math.round(radius * 0.32)}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(kind === 'move' ? 'MOVE' : 'AIM + FIRE', hintX, hintY);
+      ctx.fillText(kind === 'move' ? 'AIM' : 'AIM + FIRE', hintX, hintY);
       ctx.restore();
       return;
     }
@@ -515,7 +553,8 @@ export function createRenderer(canvas) {
 
   /**
    * Draw one frame.
-   * view = { players, bullets, myId, crosshair:{x,y}|null, sticks|null, stickRadius, fireZone, labels }
+   * view = { arena, focus:{x,y}|null, players, bullets, myId, crosshair:{x,y}|null,
+   *          sticks|null, stickRadius, fireZone, labels }
    */
   function draw(view, dt) {
     time += dt;
@@ -523,12 +562,14 @@ export function createRenderer(canvas) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#0a0d18';
     ctx.fillRect(0, 0, W, H);
+    if (!view.arena) return;
+    updateCamera(view.arena, view.focus || null, dt);
 
     const sx = shake ? (Math.random() * 2 - 1) * shake : 0;
     const sy = shake ? (Math.random() * 2 - 1) * shake : 0;
     const k = dpr * scale;
     ctx.setTransform(k, 0, 0, k, dpr * ox + sx * k, dpr * oy + sy * k);
-    if (arena) ctx.drawImage(arena, 0, 0, AW, AH);
+    drawArena(view.arena);
 
     const colorOf = new Map();
     for (const p of view.players) colorOf.set(p.id, p.color);
@@ -538,7 +579,6 @@ export function createRenderer(canvas) {
     if (view.bullets.length) drawBullets(view.bullets, getColor);
 
     const alive = view.players.filter((p) => p.alive);
-    alive.sort((a, b) => a.y - b.y);
     const me = alive.find((p) => p.id === view.myId);
     if (me && view.aimLine) drawAimLine(me);
     for (const p of alive) drawPlayer(p, p.id === view.myId);
@@ -547,6 +587,7 @@ export function createRenderer(canvas) {
 
     // screen-space overlays
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (view.focus) drawOffscreen(alive, view.myId);
     if (view.sticks) {
       const r = view.stickRadius;
       drawStick(view.sticks.left, r + 24, H - r - 24, r, 'move', view.fireZone);

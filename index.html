@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Room Showdown</title>
-  <meta name="description" content="A fast, funny top-down pistol duel for 2 to 7 friends. Five lives each, last one standing wins. Plays in the browser on phones and desktops.">
+  <meta name="description" content="A fast, funny pistol party game for 2 to 7 friends: you are a gun, and shooting is the only way to move. Five lives each, last one standing wins. Plays in the browser on phones and desktops.">
   <meta name="theme-color" content="#0d1020">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="color-scheme" content="dark">
@@ -53,7 +53,7 @@
     <div class="menu-card">
       <div class="brand">
         <h1 class="logo"><span class="l1">ROOM</span><span class="l2">SHOWDOWN</span></h1>
-        <p class="tagline">One room. One pistol each. Five lives.<br>Last one standing wins.</p>
+        <p class="tagline">You are a pistol. Shoot to fly. Five lives.<br>Last one standing wins.</p>
       </div>
       <div class="menu-controls">
         <label class="field">
@@ -138,15 +138,14 @@
   <div id="modal-howto" class="modal" role="dialog" aria-modal="true" aria-labelledby="howto-title">
     <div class="panel dialog howto">
       <h2 id="howto-title">How to Play</h2>
-      <p>Everyone is locked in one room with a pistol. <b>Each player has 5 lives.</b> Every bullet that hits you costs 1 life, then you blink for 1.5 seconds and can't be hit. Lose all 5 and you're out (you can keep watching). <b>Last player standing wins!</b></p>
+      <p><b>You are a pistol!</b> Gravity pulls you down, and the only way to move is the kick of your own shots: <b>shoot at the floor to fly up</b>, shoot sideways to dash the other way. <b>Each player has 5 lives.</b> Every bullet that hits you costs 1 life, then you blink for 1.5 seconds and can't be hit. Lose all 5 and you're out (you can keep watching). <b>Last player standing wins!</b></p>
       <p>The match lasts 3 minutes. If time runs out, the player with the most lives wins (ties: most hits landed).</p>
       <div class="howto-grid">
         <div>
           <h3>Keyboard + mouse</h3>
           <ul>
-            <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrow keys: move</li>
-            <li>Mouse: aim</li>
-            <li>Left click: shoot (hold to keep firing)</li>
+            <li>Mouse: aim (or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrow keys)</li>
+            <li>Left click or <kbd>Space</kbd>: shoot (hold to keep firing)</li>
             <li><kbd>R</kbd>: reload (6 bullets; reloads by itself when empty)</li>
             <li><kbd>Esc</kbd>: menu (the match keeps going!)</li>
           </ul>
@@ -154,15 +153,15 @@
         <div>
           <h3>Phone (landscape)</h3>
           <ul>
-            <li>Left thumb: move stick</li>
             <li>Right thumb: aim stick, push it past the dashed ring to fire</li>
+            <li>Left thumb: aim without firing</li>
             <li>Round button: reload</li>
           </ul>
           <h3>Gamepad</h3>
-          <ul><li>Sticks move and aim, RT/RB/A shoots, X reloads</li></ul>
+          <ul><li>Either stick aims, RT/RB/A shoots, X reloads</li></ul>
         </div>
       </div>
-      <p class="note">Tip: bullets bounce off nothing. Use the blocks for cover!</p>
+      <p class="note">Tip: you can fly up through platforms and land on top of them. Platforms and crates stop bullets, so use them for cover. Don't empty your gun in the air: you fall while you reload!</p>
       <div class="row"><button class="btn primary" data-close type="button" data-autofocus>Got it</button></div>
     </div>
   </div>

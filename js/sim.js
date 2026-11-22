@@ -1,4 +1,6 @@
-// Room Showdown: PURE game simulation.
+// Room Showdown: PURE game simulation (side view with gravity).
+// Every player is a pistol. Gravity pulls everyone down, and the only way to move is the
+// recoil of your own shots: shoot at the floor to fly up, shoot sideways to dash.
 // No DOM, no network and no Math.random(), so the exact same code runs on the host,
 // in Practice mode, on clients (for movement prediction) and headlessly in Node tests.
 
@@ -39,35 +41,66 @@ export function makeRng(seed = 1) {
 }
 
 // ---------------------------------------------------------------------------
-// Arena geometry
+// Arena geometry (depends only on the number of players, so every peer builds the same one)
 // ---------------------------------------------------------------------------
-export function buildSolids() {
-  const W = C.ARENA_W, H = C.ARENA_H, T = C.WALL;
-  const walls = [
-    { x: 0, y: 0, w: W, h: T, wall: true },
-    { x: 0, y: H - T, w: W, h: T, wall: true },
+export function arenaSize(n) {
+  const k = clamp(Math.round(n) || 2, 2, C.MAX_PLAYERS) - 2;
+  return { w: C.ARENA_BASE_W + k * C.ARENA_GROW_W, h: C.ARENA_BASE_H + k * C.ARENA_GROW_H };
+}
+
+/**
+ * Build the arena for `n` players: border walls, mirror-symmetric floating platforms,
+ * a few low crates on the floor for cover, and spread-out spawn points.
+ */
+export function buildArena(n) {
+  const { w: W, h: H } = arenaSize(n);
+  const T = C.WALL, R = C.PLAYER_RADIUS;
+  const cx = W / 2;
+  const solids = [
+    { x: 0, y: H - T, w: W, h: T, wall: true }, // floor
+    { x: 0, y: 0, w: W, h: T, wall: true },     // ceiling
     { x: 0, y: 0, w: T, h: H, wall: true },
     { x: W - T, y: 0, w: T, h: H, wall: true },
   ];
-  return walls.concat(C.OBSTACLES.map((o) => ({ x: o.x, y: o.y, w: o.w, h: o.h, wall: false })));
-}
-export const SOLIDS = buildSolids();
-
-export function buildSpawns() {
-  const cx = C.ARENA_W / 2, cy = C.ARENA_H / 2;
-  const out = [];
-  for (let i = 0; i < 7; i++) {
-    const ang = ((C.SPAWN_START_DEG + (i * 360) / 7) * Math.PI) / 180;
-    const x = r1(cx + Math.cos(ang) * C.SPAWN_RX);
-    const y = r1(cy + Math.sin(ang) * C.SPAWN_RY);
-    out.push({ x, y, aim: Math.atan2(cy - y, cx - x) });
+  const S = C.PLATFORM_SPACING, PW = C.PLATFORM_W, PH = C.PLATFORM_H;
+  const minX = T + 70, maxX = W - T - 70;
+  const add = (x, y, w, h, kind) => {
+    if (x < minX || x + w > maxX) return;
+    solids.push({ x: r1(x), y: r1(y), w, h, wall: false, kind });
+  };
+  // Platform rows from the floor upwards. Odd rows are shifted by half a spacing.
+  let row = 0;
+  for (let y = H - T - C.PLATFORM_ROW_GAP; y > T + 190; y -= C.PLATFORM_ROW_GAP, row++) {
+    const centers = [];
+    if (row % 2 === 0) {
+      centers.push(cx);
+      for (let k = 1; cx + k * S + PW / 2 <= maxX; k++) centers.push(cx - k * S, cx + k * S);
+    } else {
+      for (let k = 0; cx + (k + 0.5) * S + PW / 2 <= maxX; k++) centers.push(cx - (k + 0.5) * S, cx + (k + 0.5) * S);
+    }
+    for (const c of centers) add(c - PW / 2, y, PW, PH, 'platform');
   }
-  return out;
-}
-export const SPAWNS = buildSpawns();
+  // Low crates on the floor between the first-row platforms.
+  for (let k = 0; cx + (k + 0.5) * S + 40 <= maxX; k += 2) {
+    for (const c of [cx - (k + 0.5) * S, cx + (k + 0.5) * S]) add(c - 32, H - T - 64, 64, 64, 'crate');
+  }
+  return { n, w: W, h: H, solids, spawns: buildSpawns(W, H, n, solids) };
 
-export function spawnForJoinIndex(i) {
-  return SPAWNS[C.SPAWN_ORDER[i % C.SPAWN_ORDER.length]];
+  function buildSpawns(w, h, count, sol) {
+    const c = clamp(count, 1, C.MAX_PLAYERS);
+    const margin = T + 220;
+    const xs = [];
+    for (let i = 0; i < c; i++) xs.push(c === 1 ? w / 2 : margin + ((w - 2 * margin) * i) / (c - 1));
+    // Join order alternates between the ends so early joiners are far apart: 0, last, 1, last-1 ...
+    const order = [];
+    for (let lo = 0, hi = c - 1; lo <= hi; lo++, hi--) { order.push(lo); if (hi !== lo) order.push(hi); }
+    return order.map((j) => {
+      const x = r1(xs[j]);
+      let y = r1(h * 0.42);
+      while (y > T + R + 10 && circleBlocked(x, y, R + 12, sol)) y -= 10;
+      return { x, y, aim: x <= w / 2 ? 0 : Math.PI };
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -79,17 +112,20 @@ export function circleHitsRect(x, y, r, s) {
   return dx * dx + dy * dy < r * r;
 }
 
-export function circleBlocked(x, y, r, solids = SOLIDS) {
+export function circleBlocked(x, y, r, solids) {
   for (let i = 0; i < solids.length; i++) if (circleHitsRect(x, y, r, solids[i])) return true;
   return false;
 }
 
 // Push a circle out of every rectangle it overlaps (minimum translation).
-export function resolveCircle(pos, r, solids = SOLIDS) {
+// `skip(s)` may exclude some rectangles (one-way platforms).
+export function resolveCircle(pos, r, arena, skip = null) {
+  const solids = arena.solids;
   for (let iter = 0; iter < 4; iter++) {
     let pushed = false;
     for (let i = 0; i < solids.length; i++) {
       const s = solids[i];
+      if (skip && skip(s)) continue;
       const cx = clamp(pos.x, s.x, s.x + s.w), cy = clamp(pos.y, s.y, s.y + s.h);
       const dx = pos.x - cx, dy = pos.y - cy;
       const d2 = dx * dx + dy * dy;
@@ -113,21 +149,80 @@ export function resolveCircle(pos, r, solids = SOLIDS) {
     if (!pushed) break;
   }
   // Final safety clamp inside the border walls.
-  pos.x = clamp(pos.x, C.WALL + r, C.ARENA_W - C.WALL - r);
-  pos.y = clamp(pos.y, C.WALL + r, C.ARENA_H - C.WALL - r);
+  pos.x = clamp(pos.x, C.WALL + r, arena.w - C.WALL - r);
+  pos.y = clamp(pos.y, C.WALL + r, arena.h - C.WALL - r);
 }
 
-// Move a circle by (dx, dy), sliding along walls and around corners.
-export function moveCircle(pos, dx, dy, r, solids = SOLIDS) {
-  const dist = Math.hypot(dx, dy);
-  if (dist < 1e-9) { resolveCircle(pos, r, solids); return; }
-  const steps = Math.max(1, Math.ceil(dist / (r * 0.5)));
-  const sx = dx / steps, sy = dy / steps;
+// ---------------------------------------------------------------------------
+// Physics body: gravity, drag, collisions with bounce, recoil
+// ---------------------------------------------------------------------------
+/** Apply one shot's recoil: a kick opposite to `aim`, after cancelling part of the speed against it. */
+export function applyRecoil(b, aim) {
+  const dx = -Math.cos(aim), dy = -Math.sin(aim);
+  const along = b.vx * dx + b.vy * dy;
+  if (along < 0) { b.vx -= along * C.RECOIL_CANCEL * dx; b.vy -= along * C.RECOIL_CANCEL * dy; }
+  b.vx += dx * C.RECOIL;
+  b.vy += dy * C.RECOIL;
+  limitSpeed(b);
+}
+
+function limitSpeed(b) {
+  const sp = Math.hypot(b.vx, b.vy);
+  if (sp > C.MAX_SPEED) { const k = C.MAX_SPEED / sp; b.vx *= k; b.vy *= k; }
+}
+
+/**
+ * Advance a body {x, y, vx, vy} by dt: gravity, drag, movement with collisions.
+ * Hitting a surface removes the speed into it (keeping a small bounce). Sets b.grounded.
+ * Used by the authority and by client prediction, so both move exactly the same way.
+ */
+export function stepBody(b, dt, arena) {
+  const R = C.PLAYER_RADIUS;
+  b.vy += C.GRAVITY * dt;
+  const drag = Math.exp(-C.AIR_DRAG * dt);
+  b.vx *= drag;
+  b.vy *= drag;
+  limitSpeed(b);
+  let grounded = false;
+  const dist = Math.hypot(b.vx, b.vy) * dt;
+  const steps = Math.max(1, Math.ceil(dist / (R * 0.5)));
+  const sx = (b.vx * dt) / steps, sy = (b.vy * dt) / steps;
+  // Platforms are one-way: you fly up through them and land on top of them.
+  let footY = 0, rising = false;
+  const skip = (s) => s.kind === 'platform' && (rising || footY > s.y + 0.5);
   for (let i = 0; i < steps; i++) {
-    pos.x += sx;
-    pos.y += sy;
-    resolveCircle(pos, r, solids);
+    footY = b.y + R;
+    rising = b.vy < 0;
+    const bx = b.x + sx, by = b.y + sy;
+    b.x = bx; b.y = by;
+    resolveCircle(b, R, arena, skip);
+    let nx = b.x - bx, ny = b.y - by;
+    const l = Math.hypot(nx, ny);
+    if (l > 1e-9) {
+      nx /= l; ny /= l;
+      const vn = b.vx * nx + b.vy * ny; // negative = moving into the surface
+      if (vn < 0) {
+        const keep = -vn > 160 ? C.BOUNCE : 0; // small impacts just stop (no endless jitter)
+        b.vx -= (1 + keep) * vn * nx;
+        b.vy -= (1 + keep) * vn * ny;
+      }
+      if (ny < -0.6) grounded = true;
+    }
   }
+  if (!grounded) {
+    // Resting exactly on a surface produces no push: probe 1 px below.
+    footY = b.y + R;
+    rising = false;
+    if (b.vy >= 0) for (const s of arena.solids) {
+      if (!skip(s) && circleHitsRect(b.x, b.y + 1.5, R, s)) { grounded = true; break; }
+    }
+  }
+  if (grounded) {
+    const f = Math.exp(-C.GROUND_FRICTION * dt);
+    b.vx *= f;
+    if (Math.abs(b.vx) < 2) b.vx = 0;
+  }
+  b.grounded = grounded;
 }
 
 // Segment vs. axis-aligned rectangle grown by `pad`. Returns entry time t in [0,1] or -1.
@@ -172,7 +267,7 @@ export function segmentCircleT(x0, y0, x1, y1, cx, cy, R) {
 }
 
 // Earliest time a (padded) segment touches any solid, or -1 if the path is clear.
-export function segmentSolidsT(x0, y0, x1, y1, pad = 0, solids = SOLIDS) {
+export function segmentSolidsT(x0, y0, x1, y1, pad, solids) {
   let best = -1;
   for (let i = 0; i < solids.length; i++) {
     const t = segmentRectT(x0, y0, x1, y1, solids[i], pad);
@@ -191,13 +286,13 @@ function makePlayer(r, spawn) {
     color: r.color,
     slot: r.slot,
     x: spawn.x, y: spawn.y, px: spawn.x, py: spawn.y,
+    vx: 0, vy: 0, grounded: false,
     aim: spawn.aim,
     lives: C.LIVES,
     ammo: C.MAG_SIZE,
     reload: 0,   // seconds of reload remaining (0 = not reloading)
     cooldown: 0, // seconds until the pistol can fire again
     invuln: 0,   // seconds of invulnerability remaining
-    kbx: 0, kby: 0, // knockback velocity
     alive: true,
     left: false, // disconnected
     hits: 0,
@@ -217,9 +312,12 @@ function makePlayer(r, spawn) {
  */
 export function createMatch(roster, opts = {}) {
   if (!Array.isArray(roster) || roster.length === 0) throw new Error('createMatch: empty roster');
-  const players = roster.slice(0, C.MAX_PLAYERS).map((r, i) => makePlayer(r, spawnForJoinIndex(i)));
+  const list = roster.slice(0, C.MAX_PLAYERS);
+  const arena = buildArena(list.length);
+  const players = list.map((r, i) => makePlayer(r, arena.spawns[i]));
   const skip = !!opts.skipCountdown;
   return {
+    arena,
     tick: 0,
     phase: skip ? 'playing' : 'countdown', // countdown -> playing -> ended
     countdown: skip ? 0 : C.COUNTDOWN,
@@ -246,15 +344,9 @@ function emit(state, ev) {
 
 /** Validate and clamp an untrusted input object. Never trust what a client sends. */
 export function sanitizeInput(inp, prev) {
-  const out = { mx: 0, my: 0, aim: prev && Number.isFinite(prev.aim) ? prev.aim : 0, fire: false, reload: false };
+  // There is no movement input: players only move through recoil, which the host computes.
+  const out = { aim: prev && Number.isFinite(prev.aim) ? prev.aim : 0, fire: false, reload: false };
   if (!inp || typeof inp !== 'object') return out;
-  let mx = Number(inp.mx), my = Number(inp.my);
-  if (!Number.isFinite(mx)) mx = 0;
-  if (!Number.isFinite(my)) my = 0;
-  const len = Math.hypot(mx, my);
-  if (len > 1) { mx /= len; my /= len; } // speed can never exceed PLAYER_SPEED
-  out.mx = mx;
-  out.my = my;
   const aim = Number(inp.aim);
   if (Number.isFinite(aim) && Math.abs(aim) < 1e6) out.aim = wrapAngle(aim);
   out.fire = inp.fire === true || inp.fire === 1;
@@ -276,7 +368,7 @@ export function removePlayer(state, id) {
   const p = getPlayer(state, id);
   if (!p || p.left) return;
   p.left = true;
-  p.input = { mx: 0, my: 0, aim: p.aim, fire: false, reload: false };
+  p.input = { aim: p.aim, fire: false, reload: false };
   p.fireLatch = p.reloadLatch = false;
   if (p.alive && state.phase !== 'ended') eliminate(state, p, null, 'left');
 }
@@ -323,16 +415,6 @@ function updatePlayer(state, p, dt) {
   if (p.invuln > 0) { p.invuln -= dt; if (p.invuln < EPS) p.invuln = 0; }
   if (p.cooldown > 0) { p.cooldown -= dt; if (p.cooldown < EPS) p.cooldown = 0; }
 
-  // Movement (input vector is already clamped to length <= 1)
-  const vx = inp.mx * C.PLAYER_SPEED + p.kbx;
-  const vy = inp.my * C.PLAYER_SPEED + p.kby;
-  const decay = Math.exp(-C.KNOCKBACK_DECAY * dt);
-  p.kbx *= decay;
-  p.kby *= decay;
-  if (Math.abs(p.kbx) < 1) p.kbx = 0;
-  if (Math.abs(p.kby) < 1) p.kby = 0;
-  moveCircle(p, vx * dt, vy * dt, C.PLAYER_RADIUS);
-
   // Reload
   if (p.reload > 0) {
     p.reload -= dt;
@@ -353,6 +435,9 @@ function updatePlayer(state, p, dt) {
 
   p.fireLatch = false;
   p.reloadLatch = false;
+
+  // Gravity + movement (the shot above may just have kicked us)
+  stepBody(p, dt, state.arena);
 }
 
 function startReload(state, p) {
@@ -367,6 +452,7 @@ function fireBullet(state, p) {
   p.ammo--;
   p.cooldown = C.FIRE_COOLDOWN;
   p.shots++;
+  applyRecoil(p, p.aim);
   const b = {
     id: state.nextBulletId++,
     owner: p.id,
@@ -400,7 +486,7 @@ function updateBullets(state, dt) {
 // Find the first thing the bullet touches on the segment and resolve it. Returns true if consumed.
 function traceBullet(state, b, x0, y0, x1, y1) {
   let bestT = Infinity, target = null;
-  const t = segmentSolidsT(x0, y0, x1, y1, C.BULLET_RADIUS);
+  const t = segmentSolidsT(x0, y0, x1, y1, C.BULLET_RADIUS, state.arena.solids);
   if (t >= 0) bestT = t;
   const R = C.PLAYER_RADIUS + C.BULLET_RADIUS;
   for (const p of state.players) {
@@ -420,8 +506,9 @@ function applyHit(state, target, b, hx, hy) {
   target.lives = Math.max(0, target.lives - 1); // exactly one life per hit
   target.invuln = C.INVULN_TIME;
   const sp = Math.hypot(b.vx, b.vy) || 1;
-  target.kbx += (b.vx / sp) * C.KNOCKBACK_SPEED;
-  target.kby += (b.vy / sp) * C.KNOCKBACK_SPEED;
+  target.vx += (b.vx / sp) * C.KNOCKBACK_SPEED;
+  target.vy += (b.vy / sp) * C.KNOCKBACK_SPEED;
+  limitSpeed(target);
   const shooter = getPlayer(state, b.owner);
   if (shooter) shooter.hits++;
   emit(state, {
@@ -437,7 +524,7 @@ function eliminate(state, p, by, reason) {
   p.elimTick = state.tick;
   p.killedBy = by;
   p.invuln = 0;
-  p.kbx = p.kby = 0;
+  p.vx = p.vy = 0;
   p.reload = 0;
   emit(state, { type: 'elim', id: p.id, by, x: r1(p.x), y: r1(p.y), reason });
 }
@@ -502,18 +589,20 @@ export function cleanName(raw) {
 // ---------------------------------------------------------------------------
 // Compact network encoding (pure, so it is unit tested too)
 // ---------------------------------------------------------------------------
-// Player: [id, x, y, aim, lives, ammo, reloadLeft, invuln, flags, hits]
+// Player: [id, x, y, aim, lives, ammo, reloadLeft, invuln, flags, hits, vx, vy, cooldown]
 //   flags bit0 = alive, bit1 = left the room
 export function packPlayer(p) {
   return [
     p.id, r1(p.x), r1(p.y), r2(p.aim), p.lives, p.ammo,
     r2(p.reload), r1(p.invuln), (p.alive ? 1 : 0) | (p.left ? 2 : 0), p.hits,
+    r1(p.vx), r1(p.vy), r2(p.cooldown),
   ];
 }
 export function unpackPlayer(a) {
   return {
     id: a[0], x: a[1], y: a[2], aim: a[3], lives: a[4], ammo: a[5],
     reload: a[6], invuln: a[7], alive: (a[8] & 1) === 1, left: (a[8] & 2) === 2, hits: a[9],
+    vx: a[10] || 0, vy: a[11] || 0, cooldown: a[12] || 0,
   };
 }
 // Bullet: [id, x, y, vx, vy, owner]
